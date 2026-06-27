@@ -21,11 +21,6 @@ pub fn success(msg: impl AsRef<str>) {
     println!("{} {}", "✓".green().bold(), msg.as_ref());
 }
 
-/// Print an informational message with a cyan `ℹ` prefix.
-pub fn info(msg: impl AsRef<str>) {
-    eprintln!("{} {}", "ℹ".cyan().bold(), msg.as_ref());
-}
-
 /// Print a section header in bold cyan.
 pub fn header(text: impl AsRef<str>) {
     println!("{}", text.as_ref().cyan().bold());

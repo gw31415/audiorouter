@@ -121,8 +121,6 @@ impl AudioEngine {
     /// Returns `AppError` if the new config fails validation or device
     /// resolution. In that case the old engine state is preserved.
     pub fn reload(&mut self) -> Result<(), crate::error::AppError> {
-        ui::info("config changed — hot-reloading");
-
         // Read and validate the new config.
         let config = crate::config::read_config(&self.config_path)
             .map_err(|e| crate::error::AppError::config(format!("{e}")))?;
@@ -143,7 +141,6 @@ impl AudioEngine {
         self.meter_bank = new_meter_bank;
 
         self.open_all_streams()?;
-        ui::info("hot-reload complete");
         Ok(())
     }
 
