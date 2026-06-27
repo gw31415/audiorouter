@@ -175,7 +175,7 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
         print_startup_summary(&path, &plan);
     }
 
-    audio::run_audio(&plan, &resolved)?;
+    audio::run_audio(&plan, &resolved, &path)?;
 
     if !cli.quiet {
         ui::success("stopped");

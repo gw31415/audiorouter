@@ -10,6 +10,7 @@ colored = ">=2,<3"
 cpal = ">=0.15,<0.16"
 ctrlc = ">=3,<4"
 dirs = ">=5,<7"
+notify = ">=6,<7"
 ringbuf = ">=0.4,<0.5"
 serde = { version = ">=1,<2", features = ["derive"] }
 toml = ">=0.8,<0.9"

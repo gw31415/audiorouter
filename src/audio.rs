@@ -22,7 +22,11 @@ use crate::mixer::{db_to_linear, hard_limit_buffer, mix_route_interleaved};
 use crate::ui;
 use crate::validate::ValidatedConfig;
 
-/// Run the audio engine until SIGINT or a fatal error.
+/// Run the audio engine until SIGINT, a fatal error, or a config change.
+///
+/// When the config file changes on disk, the process self-restarts via `exec`
+/// so that the new config takes effect without the user needing to manually
+/// stop and restart.
 ///
 /// # Errors
 ///
@@ -30,6 +34,7 @@ use crate::validate::ValidatedConfig;
 pub fn run_audio(
     plan: &ValidatedConfig,
     resolved: &crate::devices::ResolvedAudioDevices,
+    config_path: &std::path::Path,
 ) -> Result<(), crate::error::AppError> {
     let running = Arc::new(AtomicBool::new(true));
     let fatal_error = Arc::new(AtomicBool::new(false));
@@ -75,8 +80,8 @@ pub fn run_audio(
         route_input_channels.insert(i, channels);
     }
 
-    let mut input_streams: Vec<Stream> = Vec::new();
-    let mut output_streams: Vec<Stream> = Vec::new();
+    let mut input_streams: Option<Vec<Stream>> = None;
+    let mut output_streams: Option<Vec<Stream>> = None;
 
     // ─── Open input streams (one per input device) ──────────────────────
 
@@ -132,7 +137,7 @@ pub fn run_audio(
             ))
         })?;
 
-        input_streams.push(stream);
+        input_streams.get_or_insert_with(Vec::new).push(stream);
     }
 
     // ─── Open output streams (one per output device) ────────────────────
@@ -211,17 +216,102 @@ pub fn run_audio(
             ))
         })?;
 
-        output_streams.push(stream);
+        output_streams.get_or_insert_with(Vec::new).push(stream);
+    }
+
+    // ─── Config file watcher ────────────────────────────────────────────
+    //
+    // Watch the config file for changes. When a write/close-write event fires,
+    // set the `config_changed` flag. The main loop checks this flag and, after
+    // a short debounce, self-restarts via `exec` so the new config takes effect.
+
+    let config_changed = Arc::new(AtomicBool::new(false));
+
+    {
+        let config_changed = config_changed.clone();
+        let watch_path = config_path.to_path_buf();
+        // notify::Watcher must not be dropped until the loop ends, so spawn a
+        // dedicated thread that owns the watcher and blocks on its event channel.
+        std::thread::spawn(move || {
+            use notify::{EventKind, RecursiveMode,Watcher};
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut watcher = match notify::recommended_watcher(tx) {
+                Ok(w) => w,
+                Err(e) => {
+                    ui::warning(format!("config watch disabled: {e}"));
+                    return;
+                }
+            };
+
+            // Watch the parent directory so renames/atomic saves work.
+            let watch_dir = watch_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+
+            if let Err(e) = watcher.watch(watch_dir, RecursiveMode::NonRecursive) {
+                ui::warning(format!("config watch disabled: {e}"));
+                return;
+            }
+
+            for ev in rx {
+                if let Ok(event) = ev {
+                    let is_config_event = event
+                        .paths
+                        .iter()
+                        .any(|p| p == &watch_path);
+                    if !is_config_event {
+                        continue;
+                    }
+                    match event.kind {
+                        EventKind::Create(_)
+                        | EventKind::Modify(_)
+                        | EventKind::Remove(_) => {
+                            config_changed.store(true, Ordering::SeqCst);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
     }
 
     // ─── Main loop ──────────────────────────────────────────────────────
 
-    while running.load(Ordering::SeqCst) && !fatal_error.load(Ordering::SeqCst) {
+    let mut last_change: Option<std::time::Instant> = None;
+    let debounce = Duration::from_millis(500);
+
+    loop {
+        if !running.load(Ordering::SeqCst) || fatal_error.load(Ordering::SeqCst) {
+            break;
+        }
+
+        // Record a new filesystem change event.
+        if config_changed.load(Ordering::SeqCst) {
+            last_change = Some(std::time::Instant::now());
+            config_changed.store(false, Ordering::SeqCst);
+        }
+
+        // Check whether the debounce window has elapsed since the last change.
+        // This runs every iteration regardless of config_changed, so we don't
+        // miss the restart window after clearing the flag.
+        if let Some(prev) = last_change {
+            if std::time::Instant::now().duration_since(prev) >= debounce {
+                // Config file has settled — restart.
+                ui::success("config changed — restarting");
+                drop(input_streams.take());
+                drop(output_streams.take());
+                self_restart(config_path);
+                // self_restart only returns on failure — exit the loop.
+                break;
+            }
+        }
+
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    drop(input_streams);
-    drop(output_streams);
+    drop(input_streams.take());
+    drop(output_streams.take());
 
     if fatal_error.load(Ordering::SeqCst) {
         return Err(crate::error::AppError::runtime(
@@ -230,6 +320,31 @@ pub fn run_audio(
     }
 
     Ok(())
+}
+
+/// Restart the current process via `execvp` so the new config takes effect.
+///
+/// Drops the current process image and replaces it in-place. If exec fails,
+/// prints a warning and returns (caller falls through to normal shutdown).
+fn self_restart(config_path: &std::path::Path) {
+    use std::os::unix::process::CommandExt;
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            ui::error(format!("restart failed: cannot find current exe: {e}"));
+            return;
+        }
+    };
+
+    let config_str = config_path.to_string_lossy().into_owned();
+
+    let err = std::process::Command::new(&exe)
+        .arg(&config_str)
+        .exec();
+
+    // exec only returns on failure.
+    ui::error(format!("restart failed: {err}"));
 }
 
 /// Metadata for each route used by the output callback mixer.
