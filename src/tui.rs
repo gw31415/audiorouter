@@ -555,6 +555,28 @@ fn draw_edge(
         }
     }
 
+    // Channel labels at both endpoints: source = from_channels, target = to_channels.
+    // These are drawn on top of the route line so the channel mapping is visible
+    // without opening the config.
+    let src_channels = channel_label(&route.from_channels);
+    let dst_channels = channel_label(&route.to_channels);
+    let channel_style = Style::default()
+        .fg(if route.mute {
+            Color::DarkGray
+        } else {
+            Color::Cyan
+        })
+        .add_modifier(Modifier::BOLD);
+
+    if x2 > x1 + 2 {
+        let src_x = x1.saturating_add(1);
+        let dst_x = x2.saturating_sub(dst_channels.len() as u16 + 1);
+        f.buffer_mut()
+            .set_string(src_x, y1, &src_channels, channel_style);
+        f.buffer_mut()
+            .set_string(dst_x, y2, &dst_channels, channel_style);
+    }
+
     // Gain label at midpoint.
     let label_x = mid_x.saturating_sub(gain_label.len() as u16 / 2);
     f.buffer_mut().set_string(
@@ -563,6 +585,14 @@ fn draw_edge(
         &gain_label,
         Style::default().fg(Color::Yellow),
     );
+}
+
+fn channel_label(channels: &[usize]) -> String {
+    channels
+        .iter()
+        .map(|ch| ch.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Draw a compact device node: name line + spectrum bar.
