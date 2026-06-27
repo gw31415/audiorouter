@@ -97,6 +97,9 @@ struct LoopState {
     last_tick: Instant,
 }
 
+const LOG_PANEL_HEIGHT: u16 = 7;
+const LOG_VISIBLE_LINES: u16 = LOG_PANEL_HEIGHT.saturating_sub(2);
+
 /// Inner loop — separated so terminal restoration always runs.
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -143,11 +146,20 @@ fn run_loop(
                     engine.stop();
                     break;
                 }
-                KeyCode::Down | KeyCode::PageDown => {
-                    scroll = scroll.saturating_add(1);
+                KeyCode::Up => {
+                    scroll = clamp_log_scroll(scroll.saturating_add(1), st.log_lines.len());
                 }
-                KeyCode::Up | KeyCode::PageUp => {
+                KeyCode::PageUp => {
+                    scroll = clamp_log_scroll(
+                        scroll.saturating_add(LOG_VISIBLE_LINES),
+                        st.log_lines.len(),
+                    );
+                }
+                KeyCode::Down => {
                     scroll = scroll.saturating_sub(1);
+                }
+                KeyCode::PageDown => {
+                    scroll = scroll.saturating_sub(LOG_VISIBLE_LINES);
                 }
                 _ => {}
             }
@@ -156,6 +168,8 @@ fn run_loop(
         if st.last_tick.elapsed() >= TICK_RATE {
             st.last_tick = Instant::now();
         }
+
+        scroll = clamp_log_scroll(scroll, st.log_lines.len());
 
         // Check for config changes.
         if watcher.poll() {
@@ -222,6 +236,16 @@ fn run_loop(
     Ok(())
 }
 
+fn max_log_scroll(total_lines: usize) -> u16 {
+    total_lines
+        .saturating_sub(LOG_VISIBLE_LINES as usize)
+        .min(u16::MAX as usize) as u16
+}
+
+fn clamp_log_scroll(scroll: u16, total_lines: usize) -> u16 {
+    scroll.min(max_log_scroll(total_lines))
+}
+
 /// Render one frame.
 fn draw(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -248,10 +272,10 @@ fn draw(
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(1), // status/title line
-                    Constraint::Min(16),   // routing graph (node graph)
-                    Constraint::Length(7), // log
-                    Constraint::Length(1), // help
+                    Constraint::Length(1),                // status/title line
+                    Constraint::Min(16),                  // routing graph (node graph)
+                    Constraint::Length(LOG_PANEL_HEIGHT), // log
+                    Constraint::Length(1),                // help
                 ])
                 .split(area);
 
@@ -784,12 +808,13 @@ fn draw_log(f: &mut ratatui::Frame<'_>, area: Rect, log_lines: &[String], scroll
     let visible = inner.height as usize;
     let total = log_lines.len();
 
+    let scroll = clamp_log_scroll(scroll, total) as usize;
     let start = if total > visible {
         total.saturating_sub(visible)
     } else {
         0
     };
-    let start = start.saturating_sub(scroll as usize);
+    let start = start.saturating_sub(scroll);
     let end = (start + visible).min(total);
 
     let lines: Vec<Line<'_>> = log_lines[start..end]
