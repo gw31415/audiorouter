@@ -386,9 +386,19 @@ fn draw_routing_graph(
     let col_w = inner.width / 3;
     let col_x = [inner.x, inner.x + col_w, inner.x + col_w * 2];
 
-    // Node height depends on channel count; assign vertical positions.
-    let row_spacing = 7u16; // lines per device node (including gap)
-    let node_h = 6u16; // actual node box height
+    // Node size. Terminal cells are taller than they are wide, so approximate
+    // a visual 4:3 node by using about 3/8 of the text width as row height.
+    let node_w = col_w.saturating_sub(4).max(20);
+    let ratio_h = ((node_w as f32) * 3.0 / 8.0).round() as u16;
+    let max_nodes_in_column = inputs.len().max(both.len()).max(outputs.len()).max(1) as u16;
+    let fit_h = inner
+        .height
+        .saturating_sub(1)
+        .checked_div(max_nodes_in_column)
+        .unwrap_or(8)
+        .saturating_sub(1);
+    let node_h = ratio_h.clamp(8, 18).min(fit_h.max(8));
+    let row_spacing = node_h + 1; // node plus a one-line gap
 
     let mut nodes: Vec<NodeInfo> = Vec::new();
 
@@ -423,7 +433,7 @@ fn draw_routing_graph(
             nodes.iter().find(|n| n.alias == route.from),
             nodes.iter().find(|n| n.alias == route.to),
         ) {
-            let src_right = src.x + col_w.saturating_sub(4);
+            let src_right = src.x + node_w;
             let src_mid_y = src.y + node_h / 2;
             let dst_left = dst.x;
             let dst_mid_y = dst.y + node_h / 2;
@@ -462,14 +472,7 @@ fn draw_routing_graph(
     for node in &nodes {
         let dev = plan.device_by_name(&node.alias).unwrap();
         draw_device_node(
-            f,
-            node.x,
-            node.y,
-            col_w.saturating_sub(4),
-            node_h,
-            node,
-            dev,
-            meter_bank,
+            f, node.x, node.y, node_w, node_h, node, dev, plan, meter_bank,
         );
     }
 }
@@ -569,9 +572,10 @@ fn draw_device_node(
     x: u16,
     y: u16,
     w: u16,
-    _h: u16,
+    h: u16,
     node: &NodeInfo,
     dev: &crate::validate::ResolvedDeviceRole,
+    plan: &ValidatedConfig,
     meter_bank: &crate::meter::MeterBank,
 ) {
     let w = w.max(20);
@@ -582,32 +586,27 @@ fn draw_device_node(
         DeviceRole::Both => ("🔄", Color::Magenta),
     };
 
-    // Node is 6 lines tall: border / title / spectrum(4 rows) / — content
-    // is drawn FIRST and border LAST so the border is never overwritten.
-    let h: u16 = 6;
+    // Content is drawn FIRST and border LAST so the border is never overwritten.
+    let h = h.max(8);
 
     // ── Content (drawn into inner area) ───────────────────────────────
     let inner_x = x + 1;
     let inner_w = w.saturating_sub(2);
 
-    // Line 1: icon + alias + channel info.
-    let max_name = inner_w.saturating_sub(10) as usize;
+    // Line 1: icon + alias + metadata.
+    let meta = device_metadata(node, dev, plan);
+    let title_reserved = icon.chars().count() + meta.chars().count() + 3;
+    let max_name = inner_w as usize;
+    let max_name = max_name.saturating_sub(title_reserved);
     let name_display = truncate_chars(&node.alias, max_name);
-    let ch_tag = match node.role {
-        DeviceRole::Input => format!("{}i", dev.required_input_channels),
-        DeviceRole::Output => {
-            let lim = if dev.limiter { "L" } else { "" };
-            format!("{}o{}", dev.required_output_channels, lim)
-        }
-        DeviceRole::Both => format!(
-            "{}/{}",
-            dev.required_input_channels, dev.required_output_channels
-        ),
-    };
+    let title = truncate_chars(
+        &format!("{} {} {}", icon, name_display, meta),
+        inner_w as usize,
+    );
     f.buffer_mut().set_string(
         inner_x,
         y + 1,
-        format!("{} {} {}", icon, name_display, ch_tag),
+        title,
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -626,10 +625,11 @@ fn draw_device_node(
         }
     }
 
-    // Lines 2–5: spectrum bars (4 rows).
+    // Remaining inner lines: spectrum bars.
+    let spectrum_rows = h.saturating_sub(3).max(1);
     if let Some(meter) = meter_bank.get(&node.alias, 1) {
         let snap = meter.snapshot();
-        draw_spectrum(f, inner_x, y + 2, inner_w, 4, &snap.bands);
+        draw_spectrum(f, inner_x, y + 2, inner_w, spectrum_rows, &snap.bands);
     }
 
     // ── Border (drawn LAST so it's always intact) ─────────────────────
@@ -644,6 +644,52 @@ fn draw_device_node(
         f.buffer_mut()
             .set_string(x + w - 1, y + ry, "│", border_style);
     }
+}
+
+/// Compact metadata shown in each node title.
+///
+/// Device-level limiter is shown as `LIM`. Route-level mute is summarised as
+/// `M0` or `M<n>/<total>` for all routes touching this device.
+fn device_metadata(
+    node: &NodeInfo,
+    dev: &crate::validate::ResolvedDeviceRole,
+    plan: &ValidatedConfig,
+) -> String {
+    let mut tags = Vec::new();
+
+    match node.role {
+        DeviceRole::Input => tags.push(format!("I{}", dev.required_input_channels)),
+        DeviceRole::Output => tags.push(format!("O{}", dev.required_output_channels)),
+        DeviceRole::Both => tags.push(format!(
+            "I{} O{}",
+            dev.required_input_channels, dev.required_output_channels
+        )),
+    }
+
+    if dev.limiter {
+        tags.push("LIM".to_string());
+    }
+
+    let mut route_count = 0usize;
+    let mut muted_count = 0usize;
+    for route in &plan.routes {
+        if route.from == node.alias || route.to == node.alias {
+            route_count += 1;
+            if route.mute {
+                muted_count += 1;
+            }
+        }
+    }
+
+    if route_count > 0 {
+        if muted_count == 0 {
+            tags.push("M0".to_string());
+        } else {
+            tags.push(format!("M{muted_count}/{route_count}"));
+        }
+    }
+
+    format!("[{}]", tags.join(" "))
 }
 
 /// Draw a mini EQ-style spectrum: horizontal axis = Hz, vertical = magnitude.
