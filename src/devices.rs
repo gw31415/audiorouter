@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Host, SampleRate, SupportedStreamConfig, SupportedStreamConfigRange};
 
+use crate::ui;
 use crate::validate::ValidatedConfig;
 
 /// Print all available input and output devices. Does not read config.
@@ -17,13 +18,13 @@ use crate::validate::ValidatedConfig;
 pub fn print_devices() -> anyhow::Result<()> {
     let host = cpal::default_host();
 
-    println!("Input devices:");
+    ui::header("Input devices");
     let default_input = host.default_input_device();
     let default_input_name = default_input.as_ref().and_then(|d| d.name().ok());
     print_device_list(&host, true, default_input_name.as_deref())?;
 
-    println!();
-    println!("Output devices:");
+    ui::separator();
+    ui::header("Output devices");
     let default_output = host.default_output_device();
     let default_output_name = default_output.as_ref().and_then(|d| d.name().ok());
     print_device_list(&host, false, default_output_name.as_deref())?;
@@ -50,31 +51,26 @@ fn print_single_device(
 ) -> anyhow::Result<()> {
     let name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
     let marker = match default_name {
-        Some(dn) if dn == name => " (default)",
-        _ => "",
+        Some(dn) if dn == name => Some("default"),
+        _ => None,
     };
+    let channel_kind = if is_input { "in" } else { "out" };
 
     let configs = supported_configs(device, is_input);
     match configs {
         Ok(configs) => {
             let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
             let rates = collect_sample_rates(device, is_input).unwrap_or_default();
-            println!(
-                "  {} [max {}ch: {}]{}",
-                name,
-                if is_input { "input" } else { "output" },
+            ui::device_entry(
+                &name,
                 max_channels,
-                marker
+                channel_kind,
+                Some(&rates),
+                marker,
             );
-            if !rates.is_empty() {
-                println!("    sample rates: {}", rates.join(", "));
-            }
         }
         Err(e) => {
-            println!(
-                "  {}{} (supported configs unavailable: {})",
-                name, marker, e
-            );
+            ui::device_entry_unavailable(&name, marker, &format!("{e}"));
         }
     }
 
@@ -336,7 +332,7 @@ pub fn verify_device_openable(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let err_fn = |err| eprintln!("stream error: {err}");
+    let err_fn = |err| ui::error(format!("stream error: {err}"));
 
     if is_input {
         let stream = match config.sample_format() {

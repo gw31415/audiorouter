@@ -19,6 +19,7 @@ use cpal::{
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::*};
 
 use crate::mixer::{db_to_linear, hard_limit_buffer, mix_route_interleaved};
+use crate::ui;
 use crate::validate::ValidatedConfig;
 
 /// Run the audio engine until SIGINT or a fatal error.
@@ -309,7 +310,7 @@ fn build_input_stream(
 ) -> Result<Stream, cpal::BuildStreamError> {
     let fatal = fatal_error.clone();
     let err_fn = move |err| {
-        eprintln!("input stream error: {err}");
+        ui::error(format!("input stream: {err}"));
         fatal.store(true, Ordering::SeqCst);
     };
 
@@ -385,7 +386,7 @@ fn build_output_stream(
 ) -> Result<Stream, cpal::BuildStreamError> {
     let fatal = fatal_error.clone();
     let err_fn = move |err| {
-        eprintln!("output stream error: {err}");
+        ui::error(format!("output stream: {err}"));
         fatal.store(true, Ordering::SeqCst);
     };
 

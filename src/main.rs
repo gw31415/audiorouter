@@ -6,6 +6,7 @@ mod config;
 mod devices;
 mod error;
 mod mixer;
+mod ui;
 mod validate;
 
 use std::process::ExitCode;
@@ -27,12 +28,12 @@ fn main() -> ExitCode {
         Ok(mode) => match dispatch(&cli, mode) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("error: {e}");
+                ui::error(&e.message);
                 ExitCode::from(exit_code_for(e.kind) as u8)
             }
         },
         Err(e) => {
-            eprintln!("error: {e}");
+            ui::error(format!("{e}"));
             ExitCode::from(1u8)
         }
     }
@@ -91,47 +92,50 @@ fn run_check(cli: &Cli) -> Result<(), AppError> {
 
     // Print warnings.
     for w in &plan.warnings {
-        eprintln!("warning: {w}");
+        ui::warning(w);
     }
 
     // Resolve devices via CPAL.
     let resolved = devices::resolve_devices(&plan)?;
 
     // Print success summary.
-    let inputs: Vec<&str> = plan.input_device_names();
-    let outputs: Vec<&str> = plan.output_device_names();
-
-    println!(
-        "Config OK: {} devices, {} routes, sample_rate={}, buffer_size={}",
+    ui::success(format!(
+        "config ok — {} devices, {} routes, {} Hz, buffer {}",
         plan.devices.len(),
         plan.routes.len(),
         plan.config.engine.sample_rate,
-        plan.config.engine.buffer_size
-    );
+        plan.config.engine.buffer_size,
+    ));
+
+    ui::separator();
+
+    let inputs: Vec<&str> = plan.input_device_names();
+    let outputs: Vec<&str> = plan.output_device_names();
+
     if !inputs.is_empty() {
-        let summary: Vec<String> = inputs
-            .iter()
-            .map(|&alias| {
-                let dev = plan.device_by_name(alias).unwrap();
-                format!("{} -> {}", alias, dev.device)
-            })
-            .collect();
-        println!("Inputs: {}", summary.join(", "));
+        ui::header("Inputs");
+        for &alias in &inputs {
+            let dev = plan.device_by_name(alias).unwrap();
+            ui::item_with_detail(
+                alias,
+                format!("→ {} ({}ch in)", dev.device, dev.required_input_channels),
+            );
+        }
     }
+
     if !outputs.is_empty() {
-        let summary: Vec<String> = outputs
-            .iter()
-            .map(|&alias| {
-                let dev = plan.device_by_name(alias).unwrap();
-                format!(
-                    "{} -> {}{}",
-                    alias,
-                    dev.device,
-                    if dev.limiter { " (limiter)" } else { "" }
-                )
-            })
-            .collect();
-        println!("Outputs: {}", summary.join(", "));
+        if !inputs.is_empty() {
+            ui::separator();
+        }
+        ui::header("Outputs");
+        for &alias in &outputs {
+            let dev = plan.device_by_name(alias).unwrap();
+            let limiter_tag = if dev.limiter { " · limiter" } else { "" };
+            ui::item_with_detail(
+                alias,
+                format!("→ {} ({}ch out{})", dev.device, dev.required_output_channels, limiter_tag),
+            );
+        }
     }
 
     // resolved is used for validation; its existence is the proof.
@@ -151,7 +155,7 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
 
     // Print warnings.
     for w in &plan.warnings {
-        eprintln!("warning: {w}");
+        ui::warning(w);
     }
 
     let resolved = devices::resolve_devices(&plan)?;
@@ -164,7 +168,7 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
     audio::run_audio(&plan, &resolved)?;
 
     if !cli.quiet {
-        println!("audiorouter: stopped");
+        ui::success("stopped");
     }
 
     Ok(())
@@ -172,55 +176,50 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
 
 #[allow(clippy::too_many_arguments)]
 fn print_startup_summary(path: &std::path::Path, plan: &validate::ValidatedConfig) {
-    println!("Using config: {}", path.display());
-    println!(
-        "Engine: {} Hz, buffer_size={}",
-        plan.config.engine.sample_rate, plan.config.engine.buffer_size
+    ui::header("audiorouter");
+    ui::separator();
+
+    ui::kv("config", format!("{}", path.display()));
+    ui::kv(
+        "engine",
+        format!("{} Hz · buffer {}", plan.config.engine.sample_rate, plan.config.engine.buffer_size),
     );
+    ui::separator();
 
     let inputs = plan.input_device_names();
     if !inputs.is_empty() {
-        println!("Inputs:");
-        for alias in inputs {
+        ui::header("Inputs");
+        for &alias in &inputs {
             let dev = plan.device_by_name(alias).unwrap();
-            println!(
-                "  {} -> {}, required channels: {}",
-                alias, dev.device, dev.required_input_channels
+            ui::item_with_detail(
+                alias,
+                format!("→ {} ({}ch)", dev.device, dev.required_input_channels),
             );
         }
     }
 
     let outputs = plan.output_device_names();
     if !outputs.is_empty() {
-        println!("Outputs:");
-        for alias in outputs {
+        if !inputs.is_empty() {
+            ui::separator();
+        }
+        ui::header("Outputs");
+        for &alias in &outputs {
             let dev = plan.device_by_name(alias).unwrap();
-            println!(
-                "  {} -> {}, required channels: {}{}",
+            let limiter_tag = if dev.limiter { " · limiter" } else { "" };
+            ui::item_with_detail(
                 alias,
-                dev.device,
-                dev.required_output_channels,
-                if dev.limiter { ", limiter: true" } else { "" }
+                format!("→ {} ({}ch{})", dev.device, dev.required_output_channels, limiter_tag),
             );
         }
     }
 
-    println!("Routes:");
+    ui::separator();
+    ui::header("Routes");
     for r in &plan.routes {
-        let fc: Vec<String> = r.from_channels.iter().map(|c| c.to_string()).collect();
-        let tc: Vec<String> = r.to_channels.iter().map(|c| c.to_string()).collect();
-        let gain_display = if r.mute {
-            "muted".to_string()
-        } else {
-            format!("{:.1} dB", r.gain_db)
-        };
-        println!(
-            "  {} [{}] -> {} [{}], gain={}",
-            r.from,
-            fc.join(","),
-            r.to,
-            tc.join(","),
-            gain_display
-        );
+        ui::route(&r.from, &r.from_channels, &r.to, &r.to_channels, r.gain_db, r.mute);
     }
+
+    ui::separator();
+    ui::success("running — Ctrl-C to stop");
 }
