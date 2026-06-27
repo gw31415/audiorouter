@@ -21,6 +21,11 @@ pub fn success(msg: impl AsRef<str>) {
     println!("{} {}", "✓".green().bold(), msg.as_ref());
 }
 
+/// Print an informational message with a cyan `ℹ` prefix.
+pub fn info(msg: impl AsRef<str>) {
+    eprintln!("{} {}", "ℹ".cyan().bold(), msg.as_ref());
+}
+
 /// Print a section header in bold cyan.
 pub fn header(text: impl AsRef<str>) {
     println!("{}", text.as_ref().cyan().bold());
@@ -29,11 +34,6 @@ pub fn header(text: impl AsRef<str>) {
 /// Print a blank line separator.
 pub fn separator() {
     println!();
-}
-
-/// A key-value row: `key` is dimmed+bold, right-aligned to a fixed width.
-pub fn kv(key: impl AsRef<str>, value: impl AsRef<str>) {
-    println!("  {}  {}", key.as_ref().dimmed().bold(), value.as_ref());
 }
 
 /// Print a list item with a right-aligned detail field.
@@ -71,31 +71,4 @@ pub fn device_entry_unavailable(name: &str, marker: Option<&str>, err: &str) {
     }
     line.push_str(&format!("\n    {}", err.red()));
     println!("{line}");
-}
-
-/// Print a single route line with colored arrows and gain.
-pub fn route(
-    from: &str,
-    from_channels: &[usize],
-    to: &str,
-    to_channels: &[usize],
-    gain_db: f32,
-    muted: bool,
-) {
-    let fc: Vec<String> = from_channels.iter().map(|c| c.to_string()).collect();
-    let tc: Vec<String> = to_channels.iter().map(|c| c.to_string()).collect();
-    let gain_display = if muted {
-        "muted".to_string().yellow().to_string()
-    } else {
-        format!("{:+.1} dB", gain_db).normal().to_string()
-    };
-    println!(
-        "  {} [{}] {} {} [{}]  {}",
-        from.blue(),
-        fc.join(",").blue().dimmed(),
-        "→".cyan(),
-        to.green(),
-        tc.join(",").green().dimmed(),
-        gain_display
-    );
 }

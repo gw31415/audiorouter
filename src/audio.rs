@@ -5,12 +5,15 @@
 //! `D` writes its full physical interleaved frames into every route buffer
 //! where `D` is `from`. The output callback for device `O` reads from every
 //! route buffer where `O` is `to`.
+//!
+//! Hot-reload: when the config file changes on disk, the engine tears down
+//! only the affected streams and rebuilds them from the new plan — no process
+//! restart, no TUI disruption.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{
@@ -18,220 +21,335 @@ use cpal::{
 };
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::*};
 
+use crate::meter::MeterBank;
 use crate::mixer::{db_to_linear, hard_limit_buffer, mix_route_interleaved};
 use crate::ui;
 use crate::validate::ValidatedConfig;
 
-/// Run the audio engine until SIGINT, a fatal error, or a config change.
-///
-/// When the config file changes on disk, the process self-restarts via `exec`
-/// so that the new config takes effect without the user needing to manually
-/// stop and restart.
-///
-/// # Errors
-///
-/// Returns `AppError` (Runtime) on fatal audio/stream errors.
-pub fn run_audio(
-    plan: &ValidatedConfig,
-    resolved: &crate::devices::ResolvedAudioDevices,
-    config_path: &std::path::Path,
-) -> Result<(), crate::error::AppError> {
-    let running = Arc::new(AtomicBool::new(true));
-    let fatal_error = Arc::new(AtomicBool::new(false));
+// ─── AudioEngine ───────────────────────────────────────────────────────────
 
-    {
-        let r = running.clone();
-        ctrlc::set_handler(move || {
-            r.store(false, Ordering::SeqCst);
-        })
-        .map_err(|e| {
-            crate::error::AppError::runtime(format!("failed to install Ctrl-C handler: {e}"))
-        })?;
+/// The audio engine owns all streams and ring buffers for a single plan.
+///
+/// When the config file changes, call [`AudioEngine::reload`] to swap in a
+/// new plan without restarting the process.
+pub struct AudioEngine {
+    plan: ValidatedConfig,
+    resolved: crate::devices::ResolvedAudioDevices,
+    config_path: PathBuf,
+    input_streams: Option<Vec<Stream>>,
+    output_streams: Option<Vec<Stream>>,
+    meter_bank: Arc<MeterBank>,
+    running: Arc<AtomicBool>,
+    fatal_error: Arc<AtomicBool>,
+}
+
+/// Result of an engine state query — used by the TUI main loop.
+pub enum EngineState {
+    /// Engine is running normally.
+    Running,
+    /// A fatal audio error occurred.
+    FatalError,
+    /// Ctrl-C was received.
+    Stopped,
+}
+
+impl AudioEngine {
+    /// Create a new engine and open all streams immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppError` (Runtime) on fatal audio/stream errors.
+    pub fn new(
+        plan: ValidatedConfig,
+        resolved: crate::devices::ResolvedAudioDevices,
+        config_path: &Path,
+    ) -> Result<Self, crate::error::AppError> {
+        let meter_bank = Arc::new(MeterBank::for_plan(&plan));
+        let running = Arc::new(AtomicBool::new(true));
+        let fatal_error = Arc::new(AtomicBool::new(false));
+
+        let mut engine = Self {
+            plan,
+            resolved,
+            config_path: config_path.to_path_buf(),
+            input_streams: None,
+            output_streams: None,
+            meter_bank,
+            running,
+            fatal_error,
+        };
+
+        engine.open_all_streams()?;
+        Ok(engine)
     }
 
-    let sample_rate = plan.config.engine.sample_rate;
-    let buffer_size = plan.config.engine.buffer_size;
+    /// Shared handle to the meter bank (for TUI reads).
+    pub fn meter_bank(&self) -> &Arc<MeterBank> {
+        &self.meter_bank
+    }
 
-    // ─── Pre-split all per-route ring buffers ───────────────────────────
-    //
-    // Each route gets one SPSC ring. We split immediately into (prod, cons)
-    // and store them in separate maps keyed by route index.
+    /// Current validated plan.
+    pub fn plan(&self) -> &ValidatedConfig {
+        &self.plan
+    }
 
-    let mut route_producers: HashMap<usize, HeapProd<f32>> = HashMap::new();
-    let mut route_consumers: HashMap<usize, (HeapCons<f32>, usize)> = HashMap::new();
-    let mut route_input_channels: HashMap<usize, usize> = HashMap::new();
+    /// Signal the engine to stop.
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
 
-    for (i, route) in plan.routes.iter().enumerate() {
-        let from_device = &resolved.devices[&route.from];
-        let channels = if from_device.is_input && from_device.max_input_channels > 0 {
-            from_device.max_input_channels as usize
+    /// Check the current engine state.
+    pub fn state(&self) -> EngineState {
+        if self.fatal_error.load(Ordering::SeqCst) {
+            EngineState::FatalError
+        } else if self.running.load(Ordering::SeqCst) {
+            EngineState::Running
         } else {
-            plan.device_by_name(&route.from)
-                .map(|r| r.required_input_channels.max(1))
-                .unwrap_or(1)
-        };
-
-        let capacity = buffer_size as usize * channels * 4;
-        let rb = HeapRb::<f32>::new(capacity);
-        let (prod, cons) = rb.split();
-
-        route_producers.insert(i, prod);
-        route_consumers.insert(i, (cons, channels));
-        route_input_channels.insert(i, channels);
+            EngineState::Stopped
+        }
     }
 
-    let mut input_streams: Option<Vec<Stream>> = None;
-    let mut output_streams: Option<Vec<Stream>> = None;
+    /// Hot-reload: re-read config, re-validate, re-resolve devices, and
+    /// rebuild streams — all without restarting the process.
+    ///
+    /// Drops existing streams first (causing a brief audio gap), then opens
+    /// new ones. If the new config is invalid, keeps the old streams running
+    /// and returns an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppError` if the new config fails validation or device
+    /// resolution. In that case the old engine state is preserved.
+    pub fn reload(&mut self) -> Result<(), crate::error::AppError> {
+        ui::info("config changed — hot-reloading");
 
-    // ─── Open input streams (one per input device) ──────────────────────
+        // Read and validate the new config.
+        let config = crate::config::read_config(&self.config_path)
+            .map_err(|e| crate::error::AppError::config(format!("{e}")))?;
+        let new_plan = crate::validate::validate_config(config).map_err(|errors| {
+            crate::error::AppError::config(format!(
+                "config validation failed:\n{}",
+                errors.join("\n")
+            ))
+        })?;
+        let new_resolved = crate::devices::resolve_devices(&new_plan)?;
+        let new_meter_bank = Arc::new(MeterBank::for_plan(&new_plan));
 
-    for alias in plan.input_device_names() {
-        let resolved_dev = &resolved.devices[alias];
+        // Swap everything atomically.
+        self.teardown_streams();
 
-        let route_indices: Vec<usize> = plan
-            .routes
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.from == alias)
-            .map(|(i, _)| i)
-            .collect();
+        self.plan = new_plan;
+        self.resolved = new_resolved;
+        self.meter_bank = new_meter_bank;
 
-        let channels = route_input_channels[&route_indices[0]];
+        self.open_all_streams()?;
+        ui::info("hot-reload complete");
+        Ok(())
+    }
 
-        let supported = find_config_for(&resolved_dev.device, true, sample_rate, channels)
-            .map_err(crate::error::AppError::runtime)?;
+    /// Tear down all streams.
+    fn teardown_streams(&mut self) {
+        // Drop output first, then input, to minimise clicks.
+        self.output_streams.take();
+        self.input_streams.take();
+    }
 
-        let stream_config = StreamConfig {
-            channels: supported.channels(),
-            sample_rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
+    /// Open all input and output streams for the current plan.
+    fn open_all_streams(&mut self) -> Result<(), crate::error::AppError> {
+        let sample_rate = self.plan.config.engine.sample_rate;
 
-        let sample_format = supported.sample_format();
+        // ─── Pre-split all per-route ring buffers ───────────────────────
+        let mut route_producers: HashMap<usize, HeapProd<f32>> = HashMap::new();
+        let mut route_consumers: HashMap<usize, (HeapCons<f32>, usize)> = HashMap::new();
+        let mut route_input_channels: HashMap<usize, usize> = HashMap::new();
+        let buffer_size = self.plan.config.engine.buffer_size as usize;
 
-        // Collect producers for this device's routes.
-        let mut producers: Vec<HeapProd<f32>> = Vec::new();
-        for &ri in &route_indices {
-            let prod = route_producers.remove(&ri).unwrap();
-            producers.push(prod);
+        for (i, route) in self.plan.routes.iter().enumerate() {
+            let from_device = &self.resolved.devices[&route.from];
+            let channels = if from_device.is_input && from_device.max_input_channels > 0 {
+                from_device.max_input_channels as usize
+            } else {
+                self.plan
+                    .device_by_name(&route.from)
+                    .map(|r| r.required_input_channels.max(1))
+                    .unwrap_or(1)
+            };
+
+            let capacity = buffer_size * channels * 4;
+            let rb = HeapRb::<f32>::new(capacity);
+            let (prod, cons) = rb.split();
+
+            route_producers.insert(i, prod);
+            route_consumers.insert(i, (cons, channels));
+            route_input_channels.insert(i, channels);
         }
 
-        let stream = build_input_stream(
-            &resolved_dev.device,
-            stream_config,
-            sample_format,
-            producers,
-            &fatal_error,
-        )
-        .map_err(|e| {
-            crate::error::AppError::runtime(format!(
-                "failed to open input stream for device \"{}\": {e}",
-                resolved_dev.name
-            ))
-        })?;
+        // ─── Open input streams ─────────────────────────────────────────
+        for alias in self.plan.input_device_names() {
+            let resolved_dev = &self.resolved.devices[alias];
 
-        stream.play().map_err(|e| {
-            crate::error::AppError::runtime(format!(
-                "failed to start input stream for device \"{}\": {e}",
-                resolved_dev.name
-            ))
-        })?;
+            let route_indices: Vec<usize> = self
+                .plan
+                .routes
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.from == alias)
+                .map(|(i, _)| i)
+                .collect();
 
-        input_streams.get_or_insert_with(Vec::new).push(stream);
-    }
+            let channels = route_input_channels[&route_indices[0]];
 
-    // ─── Open output streams (one per output device) ────────────────────
+            let supported = find_config_for(&resolved_dev.device, true, sample_rate, channels)
+                .map_err(crate::error::AppError::runtime)?;
 
-    for alias in plan.output_device_names() {
-        let resolved_dev = &resolved.devices[alias];
+            let stream_config = StreamConfig {
+                channels: supported.channels(),
+                sample_rate,
+                buffer_size: cpal::BufferSize::Default,
+            };
+            let sample_format = supported.sample_format();
 
-        let route_indices: Vec<usize> = plan
-            .routes
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.to == alias)
-            .map(|(i, _)| i)
-            .collect();
+            let mut producers: Vec<HeapProd<f32>> = Vec::new();
+            for &ri in &route_indices {
+                let prod = route_producers.remove(&ri).unwrap();
+                producers.push(prod);
+            }
 
-        let out_channels = resolved_dev.max_output_channels as usize;
-        let supported = find_config_for(&resolved_dev.device, false, sample_rate, out_channels)
-            .map_err(crate::error::AppError::runtime)?;
+            let stream = build_input_stream(
+                &resolved_dev.device,
+                stream_config,
+                sample_format,
+                producers,
+                &self.fatal_error,
+                alias.to_string(),
+                self.meter_bank.clone(),
+            )
+            .map_err(|e| {
+                crate::error::AppError::runtime(format!(
+                    "failed to open input stream for device \"{}\": {e}",
+                    resolved_dev.name
+                ))
+            })?;
 
-        let stream_config = StreamConfig {
-            channels: supported.channels(),
-            sample_rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
+            stream.play().map_err(|e| {
+                crate::error::AppError::runtime(format!(
+                    "failed to start input stream for device \"{}\": {e}",
+                    resolved_dev.name
+                ))
+            })?;
 
-        let sample_format = supported.sample_format();
-
-        // Collect consumers and metadata for this device's routes.
-        let mut consumers: Vec<ConsumerEntry> = Vec::new();
-        let mut route_meta: Vec<RouteMixMeta> = Vec::new();
-        for &ri in &route_indices {
-            let (cons, ch) = route_consumers.remove(&ri).unwrap();
-            consumers.push(ConsumerEntry {
-                consumer: cons,
-                channels: ch,
-            });
-
-            let route = &plan.routes[ri];
-            route_meta.push(RouteMixMeta {
-                from_channels: route.from_channels.clone(),
-                to_channels: route.to_channels.clone(),
-                gain: if route.mute {
-                    0.0
-                } else {
-                    db_to_linear(route.gain_db)
-                },
-            });
+            self.input_streams.get_or_insert_with(Vec::new).push(stream);
         }
 
-        let limiter = plan
-            .device_by_name(alias)
-            .map(|d| d.limiter)
-            .unwrap_or(false);
+        // ─── Open output streams ────────────────────────────────────────
+        for alias in self.plan.output_device_names() {
+            let resolved_dev = &self.resolved.devices[alias];
 
-        let stream = build_output_stream(
-            &resolved_dev.device,
-            stream_config,
-            sample_format,
-            out_channels,
-            consumers,
-            route_meta,
-            limiter,
-            &fatal_error,
-        )
-        .map_err(|e| {
-            crate::error::AppError::runtime(format!(
-                "failed to open output stream for device \"{}\": {e}",
-                resolved_dev.name
-            ))
-        })?;
+            let route_indices: Vec<usize> = self
+                .plan
+                .routes
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.to == alias)
+                .map(|(i, _)| i)
+                .collect();
 
-        stream.play().map_err(|e| {
-            crate::error::AppError::runtime(format!(
-                "failed to start output stream for device \"{}\": {e}",
-                resolved_dev.name
-            ))
-        })?;
+            let out_channels = resolved_dev.max_output_channels as usize;
+            let supported = find_config_for(&resolved_dev.device, false, sample_rate, out_channels)
+                .map_err(crate::error::AppError::runtime)?;
 
-        output_streams.get_or_insert_with(Vec::new).push(stream);
+            let stream_config = StreamConfig {
+                channels: supported.channels(),
+                sample_rate,
+                buffer_size: cpal::BufferSize::Default,
+            };
+            let sample_format = supported.sample_format();
+
+            let mut consumers: Vec<ConsumerEntry> = Vec::new();
+            let mut route_meta: Vec<RouteMixMeta> = Vec::new();
+            for &ri in &route_indices {
+                let (cons, ch) = route_consumers.remove(&ri).unwrap();
+                consumers.push(ConsumerEntry {
+                    consumer: cons,
+                    channels: ch,
+                });
+
+                let route = &self.plan.routes[ri];
+                route_meta.push(RouteMixMeta {
+                    from_channels: route.from_channels.clone(),
+                    to_channels: route.to_channels.clone(),
+                    gain: if route.mute {
+                        0.0
+                    } else {
+                        db_to_linear(route.gain_db)
+                    },
+                });
+            }
+
+            let limiter = self
+                .plan
+                .device_by_name(alias)
+                .map(|d| d.limiter)
+                .unwrap_or(false);
+
+            let stream = build_output_stream(
+                &resolved_dev.device,
+                stream_config,
+                sample_format,
+                out_channels,
+                consumers,
+                route_meta,
+                limiter,
+                &self.fatal_error,
+                alias.to_string(),
+                self.meter_bank.clone(),
+            )
+            .map_err(|e| {
+                crate::error::AppError::runtime(format!(
+                    "failed to open output stream for device \"{}\": {e}",
+                    resolved_dev.name
+                ))
+            })?;
+
+            stream.play().map_err(|e| {
+                crate::error::AppError::runtime(format!(
+                    "failed to start output stream for device \"{}\": {e}",
+                    resolved_dev.name
+                ))
+            })?;
+
+            self.output_streams
+                .get_or_insert_with(Vec::new)
+                .push(stream);
+        }
+
+        Ok(())
     }
+}
 
-    // ─── Config file watcher ────────────────────────────────────────────
-    //
-    // Watch the config file for changes. When a write/close-write event fires,
-    // set the `config_changed` flag. The main loop checks this flag and, after
-    // a short debounce, self-restarts via `exec` so the new config takes effect.
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        self.teardown_streams();
+    }
+}
 
-    let config_changed = Arc::new(AtomicBool::new(false));
+// ─── Config watcher ────────────────────────────────────────────────────────
 
-    {
-        let config_changed = config_changed.clone();
+/// Watches the config file for changes in a background thread.
+///
+/// When a change is detected (after debounce), sets a shared flag that the
+/// main loop can poll.
+pub struct ConfigWatcher {
+    config_changed: Arc<AtomicBool>,
+}
+
+impl ConfigWatcher {
+    /// Start watching the config file. Returns a watcher handle.
+    pub fn new(config_path: &Path) -> Self {
+        let config_changed = Arc::new(AtomicBool::new(false));
+        let flag = config_changed.clone();
         let watch_path = config_path.to_path_buf();
-        // notify::Watcher must not be dropped until the loop ends, so spawn a
-        // dedicated thread that owns the watcher and blocks on its event channel.
+
         std::thread::spawn(move || {
             use notify::{EventKind, RecursiveMode, Watcher};
 
@@ -246,10 +364,6 @@ pub fn run_audio(
 
             let canonical_watch_path = std::fs::canonicalize(&watch_path).ok();
 
-            // Watch parent directories so renames/atomic saves work. For symlinked
-            // config files, also watch the real target's parent; otherwise writes to
-            // the target can happen outside the symlink's directory and never emit an
-            // event on the symlink path itself.
             for watch_dir in config_watch_dirs(&watch_path, canonical_watch_path.as_deref()) {
                 if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
                     ui::warning(format!("config watch disabled: {e}"));
@@ -268,83 +382,20 @@ pub fn run_audio(
                 }
                 match event.kind {
                     EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                        config_changed.store(true, Ordering::SeqCst);
+                        flag.store(true, Ordering::SeqCst);
                     }
                     _ => {}
                 }
             }
         });
+
+        Self { config_changed }
     }
 
-    // ─── Main loop ──────────────────────────────────────────────────────
-
-    let mut last_change: Option<std::time::Instant> = None;
-    let debounce = Duration::from_millis(500);
-
-    loop {
-        if !running.load(Ordering::SeqCst) || fatal_error.load(Ordering::SeqCst) {
-            break;
-        }
-
-        // Record a new filesystem change event.
-        if config_changed.load(Ordering::SeqCst) {
-            last_change = Some(std::time::Instant::now());
-            config_changed.store(false, Ordering::SeqCst);
-        }
-
-        // Check whether the debounce window has elapsed since the last change.
-        // This runs every iteration regardless of config_changed, so we don't
-        // miss the restart window after clearing the flag.
-        if let Some(prev) = last_change
-            && std::time::Instant::now().duration_since(prev) >= debounce
-        {
-            // Config file has settled — restart.
-            ui::success("config changed — restarting");
-            drop(input_streams.take());
-            drop(output_streams.take());
-            self_restart(config_path);
-            // self_restart only returns on failure — exit the loop.
-            break;
-        }
-
-        std::thread::sleep(Duration::from_millis(100));
+    /// Check (and consume) the config-changed flag.
+    pub fn poll(&self) -> bool {
+        self.config_changed.swap(false, Ordering::SeqCst)
     }
-
-    drop(input_streams.take());
-    drop(output_streams.take());
-
-    if fatal_error.load(Ordering::SeqCst) {
-        return Err(crate::error::AppError::runtime(
-            "fatal audio stream error occurred",
-        ));
-    }
-
-    Ok(())
-}
-
-/// Restart the current process via `execvp` so the new config takes effect.
-///
-/// Drops the current process image and replaces it in-place. If exec fails,
-/// prints a warning and returns (caller falls through to normal shutdown).
-fn self_restart(config_path: &std::path::Path) {
-    use std::os::unix::process::CommandExt;
-
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            ui::error(format!("restart failed: cannot find current exe: {e}"));
-            return;
-        }
-    };
-
-    let config_str = config_path.to_string_lossy().into_owned();
-
-    let err = std::process::Command::new(&exe)
-        .args(["-c", &config_str])
-        .exec();
-
-    // exec only returns on failure.
-    ui::error(format!("restart failed: {err}"));
 }
 
 /// Metadata for each route used by the output callback mixer.
@@ -416,12 +467,15 @@ fn find_config_for(
 
 // ─── Input stream ────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn build_input_stream(
     device: &Device,
     config: StreamConfig,
     sample_format: SampleFormat,
     producers: Vec<HeapProd<f32>>,
     fatal_error: &Arc<AtomicBool>,
+    device_alias: String,
+    meter_bank: Arc<MeterBank>,
 ) -> Result<Stream, cpal::Error> {
     let fatal = fatal_error.clone();
     let err_fn = move |err| {
@@ -430,12 +484,20 @@ fn build_input_stream(
     };
 
     let producers = Arc::new(Mutex::new(producers));
+    let meter_bank_for_cb = meter_bank.clone();
+    let alias_for_cb = device_alias.clone();
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_input_stream(
             config,
             move |data: &[f32], _: &InputCallbackInfo| {
                 input_callback(data, &producers);
+                update_input_meters(
+                    data,
+                    config.channels as usize,
+                    &alias_for_cb,
+                    &meter_bank_for_cb,
+                );
             },
             err_fn,
             None,
@@ -444,6 +506,12 @@ fn build_input_stream(
             config,
             move |data: &[i16], _: &InputCallbackInfo| {
                 input_callback(data, &producers);
+                update_input_meters_i(
+                    data,
+                    config.channels as usize,
+                    &alias_for_cb,
+                    &meter_bank_for_cb,
+                );
             },
             err_fn,
             None,
@@ -452,6 +520,12 @@ fn build_input_stream(
             config,
             move |data: &[u16], _: &InputCallbackInfo| {
                 input_callback(data, &producers);
+                update_input_meters_i(
+                    data,
+                    config.channels as usize,
+                    &alias_for_cb,
+                    &meter_bank_for_cb,
+                );
             },
             err_fn,
             None,
@@ -460,6 +534,12 @@ fn build_input_stream(
             config,
             move |data: &[i32], _: &InputCallbackInfo| {
                 input_callback(data, &producers);
+                update_input_meters_i(
+                    data,
+                    config.channels as usize,
+                    &alias_for_cb,
+                    &meter_bank_for_cb,
+                );
             },
             err_fn,
             None,
@@ -486,6 +566,35 @@ fn input_callback<T: ToF32>(data: &[T], producers: &Arc<Mutex<Vec<HeapProd<f32>>
     }
 }
 
+/// Update per-channel meters from interleaved input data.
+fn update_input_meters(data: &[f32], channels: usize, alias: &str, meter_bank: &MeterBank) {
+    if channels == 0 {
+        return;
+    }
+    let frames = data.len() / channels;
+    for ch in 1..=channels {
+        let Some(meter) = meter_bank.get(alias, ch) else {
+            continue;
+        };
+        let ch_samples: Vec<f32> = (0..frames).map(|f| data[f * channels + (ch - 1)]).collect();
+        meter.update(&ch_samples);
+    }
+}
+
+/// Update per-channel meters from interleaved integer input data.
+fn update_input_meters_i<T: ToF32>(
+    data: &[T],
+    channels: usize,
+    alias: &str,
+    meter_bank: &MeterBank,
+) {
+    if channels == 0 {
+        return;
+    }
+    let f32_data: Vec<f32> = data.iter().map(|s| s.to_f32()).collect();
+    update_input_meters(&f32_data, channels, alias, meter_bank);
+}
+
 // ─── Output stream ───────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -498,6 +607,8 @@ fn build_output_stream(
     route_meta: Vec<RouteMixMeta>,
     limiter: bool,
     fatal_error: &Arc<AtomicBool>,
+    device_alias: String,
+    meter_bank: Arc<MeterBank>,
 ) -> Result<Stream, cpal::Error> {
     let fatal = fatal_error.clone();
     let err_fn = move |err| {
@@ -506,12 +617,15 @@ fn build_output_stream(
     };
 
     let shared = Arc::new((Mutex::new(consumers), route_meta));
+    let meter_bank_for_cb = meter_bank.clone();
+    let alias_for_cb = device_alias;
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
             config,
             move |data: &mut [f32], _: &OutputCallbackInfo| {
                 output_callback(data, out_channels, &shared, limiter);
+                update_output_meters(data, out_channels, &alias_for_cb, &meter_bank_for_cb);
             },
             err_fn,
             None,
@@ -561,8 +675,6 @@ fn output_callback<T: FromF32>(
     let (consumers, route_meta) = &**shared;
 
     if let Ok(mut guard) = consumers.lock() {
-        // Consumers and route_meta are in the same order (both filtered by
-        // this output device's routes in the same iteration).
         for (entry, meta) in guard.iter_mut().zip(route_meta.iter()) {
             let route_channels = entry.channels;
             let mut source_buf = vec![0.0f32; frame_count * route_channels];
@@ -591,6 +703,21 @@ fn output_callback<T: FromF32>(
 
     for (dst, src) in data.iter_mut().zip(mix_buf.iter()) {
         *dst = T::from_f32(*src);
+    }
+}
+
+/// Update per-channel meters from interleaved output data.
+fn update_output_meters(data: &[f32], channels: usize, alias: &str, meter_bank: &MeterBank) {
+    if channels == 0 {
+        return;
+    }
+    let frames = data.len() / channels;
+    for ch in 1..=channels {
+        let Some(meter) = meter_bank.get(alias, ch) else {
+            continue;
+        };
+        let ch_samples: Vec<f32> = (0..frames).map(|f| data[f * channels + (ch - 1)]).collect();
+        meter.update(&ch_samples);
     }
 }
 

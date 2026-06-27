@@ -5,7 +5,9 @@ mod cli;
 mod config;
 mod devices;
 mod error;
+mod meter;
 mod mixer;
+mod tui;
 mod ui;
 mod validate;
 
@@ -167,79 +169,15 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
         ui::warning(w);
     }
 
-    // Startup summary (unless --quiet).
-    if !cli.quiet {
-        print_startup_summary(&path, &plan);
-    }
+    // Collect warnings to pass to TUI.
+    let mut warnings = plan.warnings.clone();
+    warnings.extend(resolved.connect_warnings.iter().cloned());
 
-    audio::run_audio(&plan, &resolved, &path)?;
+    // Build the audio engine.
+    let engine = audio::AudioEngine::new(plan, resolved, &path)?;
 
-    if !cli.quiet {
-        ui::success("stopped");
-    }
+    // Run the TUI event loop (handles its own Ctrl-C / quit).
+    tui::run(engine, &path, &warnings)?;
 
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn print_startup_summary(path: &std::path::Path, plan: &validate::ValidatedConfig) {
-    ui::header("audiorouter");
-    ui::separator();
-
-    ui::kv("config", format!("{}", path.display()));
-    ui::kv(
-        "engine",
-        format!(
-            "{} Hz · buffer {}",
-            plan.config.engine.sample_rate, plan.config.engine.buffer_size
-        ),
-    );
-    ui::separator();
-
-    let inputs = plan.input_device_names();
-    if !inputs.is_empty() {
-        ui::header("Inputs");
-        for &alias in &inputs {
-            let dev = plan.device_by_name(alias).unwrap();
-            ui::item_with_detail(
-                alias,
-                format!("→ {} ({}ch)", dev.device, dev.required_input_channels),
-            );
-        }
-    }
-
-    let outputs = plan.output_device_names();
-    if !outputs.is_empty() {
-        if !inputs.is_empty() {
-            ui::separator();
-        }
-        ui::header("Outputs");
-        for &alias in &outputs {
-            let dev = plan.device_by_name(alias).unwrap();
-            let limiter_tag = if dev.limiter { " · limiter" } else { "" };
-            ui::item_with_detail(
-                alias,
-                format!(
-                    "→ {} ({}ch{})",
-                    dev.device, dev.required_output_channels, limiter_tag
-                ),
-            );
-        }
-    }
-
-    ui::separator();
-    ui::header("Routes");
-    for r in &plan.routes {
-        ui::route(
-            &r.from,
-            &r.from_channels,
-            &r.to,
-            &r.to_channels,
-            r.gain_db,
-            r.mute,
-        );
-    }
-
-    ui::separator();
-    ui::success("running — Ctrl-C to stop");
 }
