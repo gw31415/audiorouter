@@ -161,12 +161,6 @@ pub fn validate_config(config: Config) -> Result<ValidatedConfig, Vec<String>> {
     }
 
     // --- warnings ---
-    for role in roles.values() {
-        if !role.needs_input && !role.needs_output {
-            warnings.push(format!("device \"{}\" is not used by any route", role.name));
-        }
-    }
-
     if !config.engine.sample_rate_in_recommended_range() {
         warnings.push(format!(
             "engine.sample_rate {} is outside the recommended range (44100 or 48000)",
@@ -488,7 +482,8 @@ to_channels = [1, 2]
     }
 
     #[test]
-    fn unused_device_warning() {
+    fn no_warning_for_unused_device() {
+        // Devices not referenced by any route are allowed without warning.
         let config: Config = toml::from_str(
             r#"
 [engine]
@@ -516,12 +511,10 @@ to_channels = [1]
         )
         .unwrap();
         let result = validate_config(config).unwrap();
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|w| w.contains("not used by any route"))
-        );
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| w.contains("not used by any route")));
     }
 
     #[test]

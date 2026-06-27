@@ -116,6 +116,8 @@ pub struct ResolvedDevice {
 /// A fully resolved set of devices, ready for stream opening.
 pub struct ResolvedAudioDevices {
     pub devices: HashMap<String, ResolvedDevice>,
+    /// Warnings about config-defined devices that are not currently connected.
+    pub connect_warnings: Vec<String>,
 }
 
 /// Resolve all devices in the validated config against actual CPAL devices.
@@ -124,10 +126,17 @@ pub struct ResolvedAudioDevices {
 /// For each device that `needs_output`, search output devices by exact name.
 /// Then validate channel counts and sample rate.
 ///
+/// Devices **not used by any route** (neither input nor output) are checked
+/// for connectivity only — if they are not currently found among system
+/// devices, a warning is added to [`ResolvedAudioDevices::connect_warnings`]
+/// instead of returning an error. This lets users keep a config with optional
+/// devices that may be plugged in later.
+///
 /// # Errors
 ///
-/// Returns a `Config` error if a device cannot be found or has insufficient
-/// channels. Returns a `Runtime` error for CPAL enumeration failures.
+/// Returns a `Config` error if a route-referenced device cannot be found or
+/// has insufficient channels. Returns a `Runtime` error for CPAL enumeration
+/// failures.
 pub fn resolve_devices(
     plan: &ValidatedConfig,
 ) -> Result<ResolvedAudioDevices, crate::error::AppError> {
@@ -143,6 +152,7 @@ pub fn resolve_devices(
     let sample_rate = plan.config.engine.sample_rate;
 
     let mut resolved: HashMap<String, ResolvedDevice> = HashMap::new();
+    let mut connect_warnings: Vec<String> = Vec::new();
 
     for role in &plan.devices {
         let dev_name = &role.device;
@@ -220,8 +230,20 @@ pub fn resolve_devices(
             }
         }
 
-        // Skip devices that are not used by any route (validation already warned).
+        // Devices not used by any route: check connectivity, warn if absent.
         if !role.needs_input && !role.needs_output {
+            let found_as_input = input_devices
+                .iter()
+                .any(|d| d.name().map(|n| &n == dev_name).unwrap_or(false));
+            let found_as_output = output_devices
+                .iter()
+                .any(|d| d.name().map(|n| &n == dev_name).unwrap_or(false));
+            if !found_as_input && !found_as_output {
+                connect_warnings.push(format!(
+                    "device \"{}\" (\"{}\") is not currently connected",
+                    role.name, dev_name
+                ));
+            }
             continue;
         }
 
@@ -243,7 +265,10 @@ pub fn resolve_devices(
         );
     }
 
-    Ok(ResolvedAudioDevices { devices: resolved })
+    Ok(ResolvedAudioDevices {
+        devices: resolved,
+        connect_warnings,
+    })
 }
 
 /// Find the best supported stream config for a device at the given sample rate.

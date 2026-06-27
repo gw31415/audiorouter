@@ -90,13 +90,18 @@ fn run_check(cli: &Cli) -> Result<(), AppError> {
         AppError::config(format!("config validation failed:\n{}", errors.join("\n")))
     })?;
 
-    // Print warnings.
+    // Print config warnings.
     for w in &plan.warnings {
         ui::warning(w);
     }
 
     // Resolve devices via CPAL.
     let resolved = devices::resolve_devices(&plan)?;
+
+    // Print device connectivity warnings.
+    for w in &resolved.connect_warnings {
+        ui::warning(w);
+    }
 
     // Print success summary.
     ui::success(format!(
@@ -153,12 +158,17 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
         AppError::config(format!("config validation failed:\n{}", errors.join("\n")))
     })?;
 
-    // Print warnings.
+    // Print config warnings.
     for w in &plan.warnings {
         ui::warning(w);
     }
 
     let resolved = devices::resolve_devices(&plan)?;
+
+    // Print device connectivity warnings.
+    for w in &resolved.connect_warnings {
+        ui::warning(w);
+    }
 
     // Startup summary (unless --quiet).
     if !cli.quiet {
