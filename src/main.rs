@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::cli::{Cli, Mode};
+use crate::cli::{Cli, Command};
 use crate::config::{read_config, resolve_config_path};
 use crate::error::{AppError, exit_code_for};
 use crate::validate::validate_config;
@@ -24,17 +24,11 @@ fn main() -> ExitCode {
     // Initialize logging level.
     init_logging(&cli);
 
-    match cli.mode() {
-        Ok(mode) => match dispatch(&cli, mode) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                ui::error(&e.message);
-                ExitCode::from(exit_code_for(e.kind) as u8)
-            }
-        },
+    match dispatch(&cli, cli.command_or_default()) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            ui::error(format!("{e}"));
-            ExitCode::from(1u8)
+            ui::error(&e.message);
+            ExitCode::from(exit_code_for(e.kind) as u8)
         }
     }
 }
@@ -61,12 +55,12 @@ fn init_logging(cli: &Cli) {
         .init();
 }
 
-fn dispatch(cli: &Cli, mode: Mode) -> Result<(), AppError> {
-    match mode {
-        Mode::PrintConfigPath => run_print_config_path(cli),
-        Mode::ListDevices => run_list_devices(),
-        Mode::Check => run_check(cli),
-        Mode::Run => run_run(cli),
+fn dispatch(cli: &Cli, command: Command) -> Result<(), AppError> {
+    match command {
+        Command::ConfigPath => run_print_config_path(cli),
+        Command::ListDevices => run_list_devices(),
+        Command::Check => run_check(cli),
+        Command::Run => run_run(cli),
     }
 }
 
