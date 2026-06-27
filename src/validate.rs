@@ -69,7 +69,7 @@ impl ValidatedConfig {
 /// error messages.
 ///
 /// This function does not touch CPAL. It validates internal consistency only.
-pub fn validate_config(config: Config) -> Result<ValidatedConfig, Vec<String>> {
+pub fn validate_config(mut config: Config) -> Result<ValidatedConfig, Vec<String>> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -81,10 +81,7 @@ pub fn validate_config(config: Config) -> Result<ValidatedConfig, Vec<String>> {
         errors.push("engine.buffer_size must be positive".to_string());
     }
 
-    // --- devices ---
-    if config.devices.is_empty() {
-        errors.push("config must define at least one device".to_string());
-    }
+    add_implicit_route_devices(&mut config.devices, &config.routes);
 
     let mut name_map: HashMap<&str, &DeviceConfig> = HashMap::new();
     for dev in &config.devices {
@@ -199,6 +196,21 @@ pub fn validate_config(config: Config) -> Result<ValidatedConfig, Vec<String>> {
         routes,
         warnings,
     })
+}
+
+fn add_implicit_route_devices(devices: &mut Vec<DeviceConfig>, routes: &[RouteConfig]) {
+    let mut known: std::collections::HashSet<String> =
+        devices.iter().map(|device| device.name.clone()).collect();
+
+    for route_device in routes.iter().flat_map(|route| [&route.from, &route.to]) {
+        if known.insert(route_device.clone()) {
+            devices.push(DeviceConfig {
+                name: route_device.clone(),
+                device: route_device.clone(),
+                limiter: false,
+            });
+        }
+    }
 }
 
 fn validate_route(
@@ -331,26 +343,6 @@ to_channels = [1, 2]
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.contains("duplicate")));
-    }
-
-    #[test]
-    fn unknown_route_from_fails() {
-        let mut config = make_config();
-        config.routes[0].from = "nonexistent".to_string();
-        let result = validate_config(config);
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("unknown device alias")));
-    }
-
-    #[test]
-    fn unknown_route_to_fails() {
-        let mut config = make_config();
-        config.routes[0].to = "nonexistent".to_string();
-        let result = validate_config(config);
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("unknown device alias")));
     }
 
     #[test]
@@ -511,14 +503,16 @@ to_channels = [1]
         )
         .unwrap();
         let result = validate_config(config).unwrap();
-        assert!(!result
-            .warnings
-            .iter()
-            .any(|w| w.contains("not used by any route")));
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|w| w.contains("not used by any route"))
+        );
     }
 
     #[test]
-    fn empty_devices_fails() {
+    fn missing_devices_are_inferred_from_routes() {
         let config: Config = toml::from_str(
             r#"
 [engine]
@@ -526,14 +520,61 @@ sample_rate = 48000
 buffer_size = 256
 
 [[routes]]
-from = "a"
-to = "b"
+from = "Source"
+to = "Dest"
 from_channels = [1]
 to_channels = [1]
 "#,
         )
         .unwrap();
-        assert!(validate_config(config).is_err());
+        let result = validate_config(config).unwrap();
+
+        assert_eq!(result.config.devices.len(), 2);
+        assert_eq!(result.devices.len(), 2);
+
+        let source = result.device_by_name("Source").unwrap();
+        assert_eq!(source.device, "Source");
+        assert!(source.needs_input);
+        assert!(!source.needs_output);
+
+        let dest = result.device_by_name("Dest").unwrap();
+        assert_eq!(dest.device, "Dest");
+        assert!(!dest.needs_input);
+        assert!(dest.needs_output);
+    }
+
+    #[test]
+    fn missing_route_devices_are_added_to_explicit_devices() {
+        let config: Config = toml::from_str(
+            r#"
+[engine]
+sample_rate = 48000
+buffer_size = 256
+
+[[devices]]
+name = "out"
+device = "BlackHole 2ch"
+limiter = true
+
+[[routes]]
+from = "VT-4"
+to = "out"
+from_channels = [3, 4]
+to_channels = [1, 2]
+"#,
+        )
+        .unwrap();
+        let result = validate_config(config).unwrap();
+
+        assert_eq!(result.config.devices.len(), 2);
+        let input = result.device_by_name("VT-4").unwrap();
+        assert_eq!(input.device, "VT-4");
+        assert!(input.needs_input);
+
+        let output = result.device_by_name("out").unwrap();
+        assert_eq!(output.device, "BlackHole 2ch");
+        assert!(output.limiter);
+        assert!(output.needs_output);
     }
 
     #[test]

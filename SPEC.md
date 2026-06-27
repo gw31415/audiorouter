@@ -341,12 +341,12 @@ gain_db = -12.0
 
 ### 6.2 `[engine]`
 
-Required table.
+Optional table. If omitted, the engine uses the defaults below.
 
 | Field | Type | Required | Default | Description |
 |---|---:|---:|---:|---|
-| `sample_rate` | integer | yes | none | Engine sample rate in Hz. v0.1 requires all opened devices to support this rate. |
-| `buffer_size` | integer | yes | none | Desired audio buffer size in frames. |
+| `sample_rate` | integer | no | `48000` | Engine sample rate in Hz. v0.1 requires all opened devices to support this rate. |
+| `buffer_size` | integer | no | `256` | Desired audio buffer size in frames. |
 
 Validation:
 
@@ -358,11 +358,11 @@ Validation:
 
 ### 6.3 `[[devices]]`
 
-Array of named device definitions.
+Array of named device definitions. Entries may be omitted for devices referenced directly by routes; missing route endpoints are treated as implicit devices with `name = device = <route string>` and `limiter = false`.
 
 | Field | Type | Required | Default | Description |
 |---|---:|---:|---:|---|
-| `name` | string | yes | none | Stable config-local alias used by routes. |
+| `name` | string | no | value of `device` | Stable config-local alias used by routes. |
 | `device` | string | yes | none | Human-readable CoreAudio device name to match. |
 | `limiter` | bool | no | `false` | Applies only when this device is used as an output. Enables simple output limiter. |
 
@@ -426,8 +426,8 @@ source physical ch1 -> output physical ch2
 
 Validation:
 
-- `from` must refer to an existing `devices.name`.
-- `to` must refer to an existing `devices.name`.
+- If `from` does not refer to an explicit `devices.name`, it is treated as an implicit device with `name = device = from`.
+- If `to` does not refer to an explicit `devices.name`, it is treated as an implicit device with `name = device = to`.
 - `from_channels` and `to_channels` must have the same length.
 - Both arrays must be non-empty.
 - Every channel number must be `>= 1`.

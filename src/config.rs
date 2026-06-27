@@ -4,9 +4,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+pub const DEFAULT_SAMPLE_RATE: u32 = 48000;
+pub const DEFAULT_BUFFER_SIZE: u32 = 256;
+
 /// Top-level config structure.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub engine: EngineConfig,
     #[serde(default)]
     pub devices: Vec<DeviceConfig>,
@@ -17,17 +21,57 @@ pub struct Config {
 /// `[engine]` — sample rate and buffer size.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EngineConfig {
+    #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
+    #[serde(default = "default_buffer_size")]
     pub buffer_size: u32,
 }
 
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            buffer_size: DEFAULT_BUFFER_SIZE,
+        }
+    }
+}
+
 /// `[[devices]]` — a named device alias.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DeviceConfig {
     pub name: String,
     pub device: String,
-    #[serde(default)]
     pub limiter: bool,
+}
+
+impl<'de> Deserialize<'de> for DeviceConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawDeviceConfig {
+            name: Option<String>,
+            device: String,
+            #[serde(default)]
+            limiter: bool,
+        }
+
+        let raw = RawDeviceConfig::deserialize(deserializer)?;
+        Ok(Self {
+            name: raw.name.unwrap_or_else(|| raw.device.clone()),
+            device: raw.device,
+            limiter: raw.limiter,
+        })
+    }
+}
+
+fn default_sample_rate() -> u32 {
+    DEFAULT_SAMPLE_RATE
+}
+
+fn default_buffer_size() -> u32 {
+    DEFAULT_BUFFER_SIZE
 }
 
 /// `[[routes]]` — a channel mapping from one device to another.
@@ -208,6 +252,75 @@ to_channels = [1]
         .unwrap();
         assert!(!config.routes[0].mute);
         assert!((config.routes[0].gain_db - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn default_engine_is_used_when_engine_table_is_missing() {
+        let config: Config = toml::from_str(
+            r#"
+[[devices]]
+device = "Source"
+
+[[devices]]
+device = "Dest"
+
+[[routes]]
+from = "Source"
+to = "Dest"
+from_channels = [1]
+to_channels = [1]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.engine.sample_rate, DEFAULT_SAMPLE_RATE);
+        assert_eq!(config.engine.buffer_size, DEFAULT_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn default_engine_fields_are_used_when_missing() {
+        let config: Config = toml::from_str(
+            r#"
+[engine]
+sample_rate = 44100
+
+[[devices]]
+device = "Source"
+
+[[devices]]
+device = "Dest"
+
+[[routes]]
+from = "Source"
+to = "Dest"
+from_channels = [1]
+to_channels = [1]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.engine.sample_rate, 44100);
+        assert_eq!(config.engine.buffer_size, DEFAULT_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn device_name_defaults_to_device_string() {
+        let config: Config = toml::from_str(
+            r#"
+[engine]
+sample_rate = 48000
+buffer_size = 256
+
+[[devices]]
+device = "BlackHole 2ch"
+limiter = true
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.devices[0].name, "BlackHole 2ch");
+        assert_eq!(config.devices[0].device, "BlackHole 2ch");
+        assert!(config.devices[0].limiter);
     }
 
     #[test]
