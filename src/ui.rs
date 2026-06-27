@@ -33,11 +33,7 @@ pub fn separator() {
 
 /// A key-value row: `key` is dimmed+bold, right-aligned to a fixed width.
 pub fn kv(key: impl AsRef<str>, value: impl AsRef<str>) {
-    println!(
-        "  {}  {}",
-        key.as_ref().dimmed().bold(),
-        value.as_ref()
-    );
+    println!("  {}  {}", key.as_ref().dimmed().bold(), value.as_ref());
 }
 
 /// Print a list item with a right-aligned detail field.
@@ -56,10 +52,10 @@ pub fn device_entry(
 ) {
     let ch_str = format!("{} {}", max_channels, channel_kind);
     let mut line = format!("  {}  {}", name.bold(), ch_str.magenta());
-    if let Some(rates) = rates {
-        if !rates.is_empty() {
-            line.push_str(&format!("  {}", rates.join(", ").dimmed()));
-        }
+    if let Some(rates) = rates
+        && !rates.is_empty()
+    {
+        line.push_str(&format!("  {}", rates.join(", ").dimmed()));
     }
     if let Some(m) = marker {
         line.push_str(&format!("  {}", m.green().bold()));

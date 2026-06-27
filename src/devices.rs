@@ -61,13 +61,7 @@ fn print_single_device(
         Ok(configs) => {
             let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
             let rates = collect_sample_rates(device, is_input).unwrap_or_default();
-            ui::device_entry(
-                &name,
-                max_channels,
-                channel_kind,
-                Some(&rates),
-                marker,
-            );
+            ui::device_entry(&name, max_channels, channel_kind, Some(&rates), marker);
         }
         Err(e) => {
             ui::device_entry_unavailable(&name, marker, &format!("{e}"));

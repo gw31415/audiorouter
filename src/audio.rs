@@ -7,6 +7,7 @@
 //! route buffer where `O` is `to`.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -233,7 +234,7 @@ pub fn run_audio(
         // notify::Watcher must not be dropped until the loop ends, so spawn a
         // dedicated thread that owns the watcher and blocks on its event channel.
         std::thread::spawn(move || {
-            use notify::{EventKind, RecursiveMode,Watcher};
+            use notify::{EventKind, RecursiveMode, Watcher};
 
             let (tx, rx) = std::sync::mpsc::channel();
             let mut watcher = match notify::recommended_watcher(tx) {
@@ -244,33 +245,33 @@ pub fn run_audio(
                 }
             };
 
-            // Watch the parent directory so renames/atomic saves work.
-            let watch_dir = watch_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."));
+            let canonical_watch_path = std::fs::canonicalize(&watch_path).ok();
 
-            if let Err(e) = watcher.watch(watch_dir, RecursiveMode::NonRecursive) {
-                ui::warning(format!("config watch disabled: {e}"));
-                return;
+            // Watch parent directories so renames/atomic saves work. For symlinked
+            // config files, also watch the real target's parent; otherwise writes to
+            // the target can happen outside the symlink's directory and never emit an
+            // event on the symlink path itself.
+            for watch_dir in config_watch_dirs(&watch_path, canonical_watch_path.as_deref()) {
+                if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
+                    ui::warning(format!("config watch disabled: {e}"));
+                    return;
+                }
             }
 
-            for ev in rx {
-                if let Ok(event) = ev {
-                    let is_config_event = event
-                        .paths
-                        .iter()
-                        .any(|p| p == &watch_path);
-                    if !is_config_event {
-                        continue;
+            for event in rx.into_iter().flatten() {
+                let is_config_event = config_event_matches(
+                    &event.paths,
+                    &watch_path,
+                    canonical_watch_path.as_deref(),
+                );
+                if !is_config_event {
+                    continue;
+                }
+                match event.kind {
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                        config_changed.store(true, Ordering::SeqCst);
                     }
-                    match event.kind {
-                        EventKind::Create(_)
-                        | EventKind::Modify(_)
-                        | EventKind::Remove(_) => {
-                            config_changed.store(true, Ordering::SeqCst);
-                        }
-                        _ => {}
-                    }
+                    _ => {}
                 }
             }
         });
@@ -295,16 +296,16 @@ pub fn run_audio(
         // Check whether the debounce window has elapsed since the last change.
         // This runs every iteration regardless of config_changed, so we don't
         // miss the restart window after clearing the flag.
-        if let Some(prev) = last_change {
-            if std::time::Instant::now().duration_since(prev) >= debounce {
-                // Config file has settled — restart.
-                ui::success("config changed — restarting");
-                drop(input_streams.take());
-                drop(output_streams.take());
-                self_restart(config_path);
-                // self_restart only returns on failure — exit the loop.
-                break;
-            }
+        if let Some(prev) = last_change
+            && std::time::Instant::now().duration_since(prev) >= debounce
+        {
+            // Config file has settled — restart.
+            ui::success("config changed — restarting");
+            drop(input_streams.take());
+            drop(output_streams.take());
+            self_restart(config_path);
+            // self_restart only returns on failure — exit the loop.
+            break;
         }
 
         std::thread::sleep(Duration::from_millis(100));
@@ -339,9 +340,7 @@ fn self_restart(config_path: &std::path::Path) {
 
     let config_str = config_path.to_string_lossy().into_owned();
 
-    let err = std::process::Command::new(&exe)
-        .arg(&config_str)
-        .exec();
+    let err = std::process::Command::new(&exe).arg(&config_str).exec();
 
     // exec only returns on failure.
     ui::error(format!("restart failed: {err}"));
@@ -652,6 +651,43 @@ impl FromF32 for i32 {
     }
 }
 
+fn config_watch_dirs(watch_path: &Path, canonical_watch_path: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    push_unique_path(
+        &mut dirs,
+        watch_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+    );
+
+    if let Some(canonical_watch_path) = canonical_watch_path {
+        push_unique_path(
+            &mut dirs,
+            canonical_watch_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf(),
+        );
+    }
+
+    dirs
+}
+
+fn config_event_matches(
+    event_paths: &[PathBuf],
+    watch_path: &Path,
+    canonical_watch_path: Option<&Path>,
+) -> bool {
+    event_paths
+        .iter()
+        .any(|p| p == watch_path || canonical_watch_path.is_some_and(|canonical| p == canonical))
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
 // Use cpal's Sample trait to avoid unused-import warnings.
 const _: fn() = || {
     fn _assert_sample<T: Sample>() {}
@@ -659,3 +695,35 @@ const _: fn() = || {
         _assert_sample::<f32>();
     }
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn config_symlink_watches_and_matches_real_target_file() {
+        let link_path = PathBuf::from("/tmp/audiorouter-test/link/config.toml");
+        let target_path = PathBuf::from("/tmp/audiorouter-test/target/config.toml");
+
+        let dirs = config_watch_dirs(&link_path, Some(&target_path));
+        assert!(dirs.contains(&PathBuf::from("/tmp/audiorouter-test/link")));
+        assert!(dirs.contains(&PathBuf::from("/tmp/audiorouter-test/target")));
+
+        assert!(config_event_matches(
+            std::slice::from_ref(&target_path),
+            &link_path,
+            Some(&target_path)
+        ));
+        assert!(config_event_matches(
+            std::slice::from_ref(&link_path),
+            &link_path,
+            Some(&target_path)
+        ));
+        assert!(!config_event_matches(
+            &[PathBuf::from("/tmp/audiorouter-test/target/other.toml")],
+            &link_path,
+            Some(&target_path)
+        ));
+    }
+}

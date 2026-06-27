@@ -138,7 +138,10 @@ fn run_check(cli: &Cli) -> Result<(), AppError> {
             let limiter_tag = if dev.limiter { " · limiter" } else { "" };
             ui::item_with_detail(
                 alias,
-                format!("→ {} ({}ch out{})", dev.device, dev.required_output_channels, limiter_tag),
+                format!(
+                    "→ {} ({}ch out{})",
+                    dev.device, dev.required_output_channels, limiter_tag
+                ),
             );
         }
     }
@@ -192,7 +195,10 @@ fn print_startup_summary(path: &std::path::Path, plan: &validate::ValidatedConfi
     ui::kv("config", format!("{}", path.display()));
     ui::kv(
         "engine",
-        format!("{} Hz · buffer {}", plan.config.engine.sample_rate, plan.config.engine.buffer_size),
+        format!(
+            "{} Hz · buffer {}",
+            plan.config.engine.sample_rate, plan.config.engine.buffer_size
+        ),
     );
     ui::separator();
 
@@ -219,7 +225,10 @@ fn print_startup_summary(path: &std::path::Path, plan: &validate::ValidatedConfi
             let limiter_tag = if dev.limiter { " · limiter" } else { "" };
             ui::item_with_detail(
                 alias,
-                format!("→ {} ({}ch{})", dev.device, dev.required_output_channels, limiter_tag),
+                format!(
+                    "→ {} ({}ch{})",
+                    dev.device, dev.required_output_channels, limiter_tag
+                ),
             );
         }
     }
@@ -227,7 +236,14 @@ fn print_startup_summary(path: &std::path::Path, plan: &validate::ValidatedConfi
     ui::separator();
     ui::header("Routes");
     for r in &plan.routes {
-        ui::route(&r.from, &r.from_channels, &r.to, &r.to_channels, r.gain_db, r.mute);
+        ui::route(
+            &r.from,
+            &r.from_channels,
+            &r.to,
+            &r.to_channels,
+            r.gain_db,
+            r.mute,
+        );
     }
 
     ui::separator();
