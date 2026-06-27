@@ -10,6 +10,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// Number of samples to retain for the waveform scroll-back display.
 const WAVEFORM_LEN: usize = 120;
 
+/// Number of logarithmic frequency bands for the spectrum display.
+pub const NUM_BANDS: usize = 16;
+
+/// Centre frequencies (Hz) for each band — covering ~60 Hz to ~16 kHz.
+pub const BAND_FREQS: [f32; NUM_BANDS] = [
+    60.0, 80.0, 120.0, 170.0, 250.0, 350.0, 500.0, 700.0, 1000.0, 1400.0, 2000.0, 3000.0, 4000.0,
+    6000.0, 9000.0, 13000.0,
+];
+
 /// A single channel meter: current peak/RMS levels + waveform history.
 ///
 /// Updated from the audio callback via [`ChannelMeter::update`], read from
@@ -25,6 +34,10 @@ pub struct ChannelMeter {
     waveform: Vec<AtomicUsize>,
     /// Write cursor for the waveform ring.
     write_idx: AtomicUsize,
+    /// Frequency band magnitudes [0.0–1.0] as fixed-point, updated via Goertzel.
+    bands: Vec<AtomicUsize>,
+    /// Sample rate of the stream feeding this meter (needed for Goertzel freq→coef).
+    sample_rate: AtomicUsize,
     /// Whether this channel has clipped (|sample| > 1.0) since last reset.
     clipped: AtomicBool,
 }
@@ -35,14 +48,22 @@ const SCALE: usize = 1_000_000;
 impl ChannelMeter {
     pub fn new() -> Self {
         let waveform = (0..WAVEFORM_LEN).map(|_| AtomicUsize::new(0)).collect();
+        let bands = (0..NUM_BANDS).map(|_| AtomicUsize::new(0)).collect();
         Self {
             rms: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             peak_hold: AtomicUsize::new(0),
             waveform,
             write_idx: AtomicUsize::new(0),
+            bands,
+            sample_rate: AtomicUsize::new(48000),
             clipped: AtomicBool::new(false),
         }
+    }
+
+    /// Set the sample rate (called when the audio stream is configured).
+    pub fn set_sample_rate(&self, sr: u32) {
+        self.sample_rate.store(sr as usize, Ordering::Relaxed);
     }
 
     /// Push a buffer of interleaved samples for this channel into the meter.
@@ -105,6 +126,38 @@ impl ChannelMeter {
             let idx = self.write_idx.fetch_add(1, Ordering::Relaxed) % WAVEFORM_LEN;
             self.waveform[idx].store(val, Ordering::Relaxed);
         }
+
+        // Goertzel band analysis — compute magnitude for each frequency band.
+        // This runs entirely on the stack with no allocation.
+        let sr = self.sample_rate.load(Ordering::Relaxed) as f32;
+        if sr > 0.0 && samples.len() >= 8 {
+            for (bi, &freq) in BAND_FREQS.iter().enumerate() {
+                // Only analyse if the frequency is representable (< Nyquist).
+                if freq >= sr * 0.5 {
+                    continue;
+                }
+                let k = freq / sr * samples.len() as f32;
+                let w = 2.0 * std::f32::consts::PI * k / samples.len() as f32;
+                let coeff = 2.0 * w.cos();
+                let mut s_prev = 0.0f32;
+                let mut s_prev2 = 0.0f32;
+                for &s in samples {
+                    let s_cur = s + coeff * s_prev - s_prev2;
+                    s_prev2 = s_prev;
+                    s_prev = s_cur;
+                }
+                let mag = ((s_prev * s_prev + s_prev2 * s_prev2 - coeff * s_prev * s_prev2).abs())
+                    / (samples.len() as f32);
+                // Convert to dBFS, then map -60 dB … 0 dB → 0.0 … 1.0.
+                let db = if mag > 1e-10 {
+                    10.0 * mag.log10()
+                } else {
+                    -60.0
+                };
+                let norm = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                self.bands[bi].store(lin_to_fixed(norm), Ordering::Relaxed);
+            }
+        }
     }
 
     /// Read a consistent snapshot of all meter values for TUI display.
@@ -136,6 +189,11 @@ impl ChannelMeter {
             peak_hold,
             clipped,
             waveform,
+            bands: self
+                .bands
+                .iter()
+                .map(|b| fixed_to_lin(b.load(Ordering::Relaxed)))
+                .collect(),
         }
     }
 
@@ -148,12 +206,15 @@ impl ChannelMeter {
 
 /// A read-only snapshot of meter state, safe to use off the audio thread.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MeterSnapshot {
     pub rms: f32,
     pub peak: f32,
     pub peak_hold: f32,
     pub clipped: bool,
     pub waveform: Vec<f32>,
+    /// Per-band normalised magnitudes [0.0–1.0], NUM_BANDS entries.
+    pub bands: Vec<f32>,
 }
 
 /// Convert linear gain [0.0, ∞) to fixed-point usize.

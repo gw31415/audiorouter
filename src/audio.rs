@@ -158,6 +158,11 @@ impl AudioEngine {
     fn open_all_streams(&mut self) -> Result<(), crate::error::AppError> {
         let sample_rate = self.plan.config.engine.sample_rate;
 
+        // Set sample rate on all meters for Goertzel band analysis.
+        for (_, meter) in &self.meter_bank.meters {
+            meter.set_sample_rate(sample_rate);
+        }
+
         // ─── Pre-split all per-route ring buffers ───────────────────────
         let mut route_producers: HashMap<usize, HeapProd<f32>> = HashMap::new();
         let mut route_consumers: HashMap<usize, (HeapCons<f32>, usize)> = HashMap::new();

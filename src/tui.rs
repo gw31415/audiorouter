@@ -388,7 +388,7 @@ fn draw_routing_graph(
 
     // Node height depends on channel count; assign vertical positions.
     let row_spacing = 7u16; // lines per device node (including gap)
-    let node_h = 5u16; // actual node box height
+    let node_h = 6u16; // actual node box height
 
     let mut nodes: Vec<NodeInfo> = Vec::new();
 
@@ -562,20 +562,19 @@ fn draw_edge(
     );
 }
 
-/// Draw a device node box with icon, name, device string, level meter, waveform.
+/// Draw a compact device node: name line + spectrum bar.
 #[allow(clippy::too_many_arguments)]
 fn draw_device_node(
     f: &mut ratatui::Frame<'_>,
     x: u16,
     y: u16,
     w: u16,
-    h: u16,
+    _h: u16,
     node: &NodeInfo,
     dev: &crate::validate::ResolvedDeviceRole,
     meter_bank: &crate::meter::MeterBank,
 ) {
-    let w = w.max(16);
-    let h = h.max(5);
+    let w = w.max(20);
 
     let (icon, border_color) = match node.role {
         DeviceRole::Input => ("🎤", Color::Green),
@@ -583,9 +582,59 @@ fn draw_device_node(
         DeviceRole::Both => ("🔄", Color::Magenta),
     };
 
-    // Draw border using set_string (manual box-drawing for colored borders).
+    // Node is 6 lines tall: border / title / spectrum(4 rows) / — content
+    // is drawn FIRST and border LAST so the border is never overwritten.
+    let h: u16 = 6;
+
+    // ── Content (drawn into inner area) ───────────────────────────────
+    let inner_x = x + 1;
+    let inner_w = w.saturating_sub(2);
+
+    // Line 1: icon + alias + channel info.
+    let max_name = inner_w.saturating_sub(10) as usize;
+    let name_display = truncate_chars(&node.alias, max_name);
+    let ch_tag = match node.role {
+        DeviceRole::Input => format!("{}i", dev.required_input_channels),
+        DeviceRole::Output => {
+            let lim = if dev.limiter { "L" } else { "" };
+            format!("{}o{}", dev.required_output_channels, lim)
+        }
+        DeviceRole::Both => format!(
+            "{}/{}",
+            dev.required_input_channels, dev.required_output_channels
+        ),
+    };
+    f.buffer_mut().set_string(
+        inner_x,
+        y + 1,
+        format!("{} {} {}", icon, name_display, ch_tag),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    // Clip indicator.
+    if let Some(meter) = meter_bank.get(&node.alias, 1) {
+        let snap = meter.snapshot();
+        if snap.clipped {
+            f.buffer_mut().set_string(
+                x + w.saturating_sub(3),
+                y + 1,
+                "⚡",
+                Style::default().fg(Color::Red),
+            );
+        }
+    }
+
+    // Lines 2–5: spectrum bars (4 rows).
+    if let Some(meter) = meter_bank.get(&node.alias, 1) {
+        let snap = meter.snapshot();
+        draw_spectrum(f, inner_x, y + 2, inner_w, 4, &snap.bands);
+    }
+
+    // ── Border (drawn LAST so it's always intact) ─────────────────────
     let border_style = Style::default().fg(border_color);
-    let top_bottom = "─".repeat(w.saturating_sub(2) as usize);
+    let top_bottom = "─".repeat(inner_w as usize);
     f.buffer_mut()
         .set_string(x, y, format!("╭{}╮", top_bottom), border_style);
     f.buffer_mut()
@@ -595,94 +644,61 @@ fn draw_device_node(
         f.buffer_mut()
             .set_string(x + w - 1, y + ry, "│", border_style);
     }
+}
 
-    // Line 1: icon + alias name.
-    let max_name = (w as usize).saturating_sub(6);
-    let name_display = truncate_chars(&node.alias, max_name);
-    f.buffer_mut().set_string(
-        x + 2,
-        y + 1,
-        format!("{} {}", icon, name_display),
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    );
+/// Draw a mini EQ-style spectrum: horizontal axis = Hz, vertical = magnitude.
+/// Bars grow from the bottom row upward, like a hardware EQ meter.
+/// `rows` = number of text rows (each row contributes 8 sub-levels).
+fn draw_spectrum(f: &mut ratatui::Frame<'_>, x: u16, y: u16, w: u16, rows: u16, bands: &[f32]) {
+    if bands.is_empty() || w < 4 || rows == 0 {
+        return;
+    }
 
-    // Line 2: device string (truncated).
-    let max_dev = (w as usize).saturating_sub(4);
-    let dev_display = truncate_chars(&dev.device, max_dev);
-    f.buffer_mut().set_string(
-        x + 2,
-        y + 2,
-        &dev_display,
-        Style::default().fg(Color::DarkGray),
-    );
+    let cols = w as usize;
+    let band_count = bands.len();
+    let total_levels = (rows as usize) * 8;
+    const HALF: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-    // Line 3: channel info + limiter badge.
-    let ch_info = if node.role == DeviceRole::Input {
-        format!("{}ch in", dev.required_input_channels)
-    } else if node.role == DeviceRole::Output {
-        let lim = if dev.limiter { " LIMIT" } else { "" };
-        format!("{}ch out{}", dev.required_output_channels, lim)
-    } else {
-        format!(
-            "{}in/{}out",
-            dev.required_input_channels, dev.required_output_channels
-        )
-    };
-    let ch_color = if dev.limiter && node.role == DeviceRole::Output {
+    for col in 0..cols {
+        let band_f = col as f32 / cols as f32 * band_count as f32;
+        let band_idx = (band_f as usize).min(band_count - 1);
+        let val = bands[band_idx].clamp(0.0, 1.0);
+        let level = (val * total_levels as f32).round() as usize;
+        let color = Style::default().fg(spectrum_color(val));
+
+        let full_rows = level / 8; // complete rows from the bottom
+        let partial = level % 8; // remainder in the transition row
+
+        for row in 0..rows as usize {
+            // Row 0 = top of display, row (rows-1) = bottom.
+            let rows_from_bottom = rows as usize - 1 - row;
+
+            let ch = if rows_from_bottom < full_rows {
+                '█'
+            } else if rows_from_bottom == full_rows && partial > 0 {
+                HALF[partial - 1]
+            } else {
+                ' '
+            };
+
+            f.buffer_mut()
+                .set_string(x + col as u16, y + row as u16, ch.to_string(), color);
+        }
+    }
+}
+
+/// Map a magnitude [0,1] to a spectrum colour (green → yellow → red).
+fn spectrum_color(val: f32) -> Color {
+    if val > 0.85 {
+        Color::Red
+    } else if val > 0.65 {
+        Color::LightRed
+    } else if val > 0.45 {
         Color::Yellow
+    } else if val > 0.25 {
+        Color::LightGreen
     } else {
-        Color::Gray
-    };
-    f.buffer_mut()
-        .set_string(x + 2, y + 3, &ch_info, Style::default().fg(ch_color));
-
-    // Line 4: waveform from channel 1.
-    if let Some(meter) = meter_bank.get(&node.alias, 1) {
-        let snap = meter.snapshot();
-        let wave = sparkline_from(&snap.waveform);
-        let max_wave = (w as usize).saturating_sub(4);
-        let wave_display = truncate_chars(&wave, max_wave);
-        let wave_color = if snap.clipped {
-            Color::Red
-        } else if snap.peak > 0.9 {
-            Color::LightRed
-        } else if snap.peak > 0.5 {
-            Color::Yellow
-        } else {
-            Color::Green
-        };
-        f.buffer_mut()
-            .set_string(x + 2, y + 4, &wave_display, Style::default().fg(wave_color));
-
-        // Clip indicator.
-        if snap.clipped {
-            f.buffer_mut()
-                .set_string(x + w - 4, y + 1, "⚡", Style::default().fg(Color::Red));
-        }
-
-        // Mini level bar on the same line, right-aligned.
-        let bar_max = (w as usize)
-            .saturating_sub(4)
-            .saturating_sub(wave_display.chars().count() + 1);
-        if bar_max > 2 {
-            let filled = (snap.rms.clamp(0.0, 1.0) * bar_max as f32).round() as usize;
-            let hold_pos = (snap.peak_hold.clamp(0.0, 1.0) * bar_max as f32).round() as usize;
-            let mut bar = String::with_capacity(bar_max);
-            for i in 0..bar_max {
-                if i == hold_pos && hold_pos > 0 && hold_pos < bar_max {
-                    bar.push('│'); // peak-hold marker
-                } else if i < filled {
-                    bar.push('■');
-                } else {
-                    bar.push(' ');
-                }
-            }
-            let bar_x = x + 2 + wave_display.chars().count() as u16 + 1;
-            f.buffer_mut()
-                .set_string(bar_x, y + 4, &bar, Style::default().fg(wave_color));
-        }
+        Color::Green
     }
 }
 
@@ -764,20 +780,6 @@ fn draw_help(f: &mut ratatui::Frame<'_>, area: Rect) {
 /// This is UTF-8 safe — never panics on multi-byte characters like `▁▂▃▄▅▆▇█`.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
-}
-
-/// Convert a waveform history slice into a text bar string.
-/// Maps each sample to a vertical bar character for a scrolling oscilloscope effect.
-fn sparkline_from(waveform: &[f32]) -> String {
-    const BARS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    waveform
-        .iter()
-        .map(|&v| {
-            let idx = ((v.clamp(0.0, 1.0) * (BARS.len() - 1) as f32).round() as usize)
-                .min(BARS.len() - 1);
-            BARS[idx]
-        })
-        .collect()
 }
 
 /// Timestamp since start, in MM:SS format.
