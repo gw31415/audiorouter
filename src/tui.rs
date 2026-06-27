@@ -248,7 +248,7 @@ fn draw(
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3), // status bar
+                    Constraint::Length(1), // status/title line
                     Constraint::Min(16),   // routing graph (node graph)
                     Constraint::Length(7), // log
                     Constraint::Length(1), // help
@@ -272,33 +272,29 @@ fn draw_status_bar(
     area: Rect,
     plan: &ValidatedConfig,
     start_time: Instant,
-    reload_message: &Option<String>,
+    _reload_message: &Option<String>,
 ) {
     let elapsed = start_time.elapsed();
     let mins = elapsed.as_secs() / 60;
     let secs = elapsed.as_secs() % 60;
 
-    let title = if let Some(msg) = reload_message {
-        format!(
-            " audiorouter · {} Hz · buffer {} · ↑{}m{:02}s · ⚠ {} ",
-            plan.config.engine.sample_rate, plan.config.engine.buffer_size, mins, secs, msg
-        )
-    } else {
-        format!(
-            " audiorouter · {} Hz · buffer {} · ↑{}m{:02}s · {} routes ",
-            plan.config.engine.sample_rate,
-            plan.config.engine.buffer_size,
-            mins,
-            secs,
-            plan.routes.len(),
-        )
-    };
+    let title = format!(
+        " audiorouter · {} Hz · buffer {} · ↑{}m{:02}s · {} routes ",
+        plan.config.engine.sample_rate,
+        plan.config.engine.buffer_size,
+        mins,
+        secs,
+        plan.routes.len(),
+    );
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title.bold().cyan());
-
-    f.render_widget(block, area);
+    f.buffer_mut().set_string(
+        area.x,
+        area.y,
+        title,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
 }
 
 // ── Compact fallback for tiny terminals ─────────────────────────────────────
