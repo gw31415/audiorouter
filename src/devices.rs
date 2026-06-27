@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Host, SampleRate, SupportedStreamConfig, SupportedStreamConfigRange};
+use cpal::{Device, Host, SupportedStreamConfig, SupportedStreamConfigRange};
 
 use crate::ui;
 use crate::validate::ValidatedConfig;
@@ -20,13 +20,13 @@ pub fn print_devices() -> anyhow::Result<()> {
 
     ui::header("Input devices");
     let default_input = host.default_input_device();
-    let default_input_name = default_input.as_ref().and_then(|d| d.name().ok());
+    let default_input_name = default_input.as_ref().map(|d| d.to_string());
     print_device_list(&host, true, default_input_name.as_deref())?;
 
     ui::separator();
     ui::header("Output devices");
     let default_output = host.default_output_device();
-    let default_output_name = default_output.as_ref().and_then(|d| d.name().ok());
+    let default_output_name = default_output.as_ref().map(|d| d.to_string());
     print_device_list(&host, false, default_output_name.as_deref())?;
 
     Ok(())
@@ -49,7 +49,7 @@ fn print_single_device(
     is_input: bool,
     default_name: Option<&str>,
 ) -> anyhow::Result<()> {
-    let name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+    let name = device.to_string();
     let marker = match default_name {
         Some(dn) if dn == name => Some("default"),
         _ => None,
@@ -76,8 +76,8 @@ fn collect_sample_rates(device: &Device, is_input: bool) -> anyhow::Result<Vec<S
 
     let mut rates: Vec<String> = Vec::new();
     for c in configs {
-        let min = c.min_sample_rate().0;
-        let max = c.max_sample_rate().0;
+        let min = c.min_sample_rate();
+        let max = c.max_sample_rate();
         if min == max {
             rates.push(format!("{} Hz", min));
         } else {
@@ -157,9 +157,7 @@ pub fn resolve_devices(
         let mut max_out_ch: u16 = 0;
 
         if role.needs_input {
-            let found = input_devices
-                .iter()
-                .find(|d| d.name().map(|n| &n == dev_name).unwrap_or(false));
+            let found = input_devices.iter().find(|d| &d.to_string() == dev_name);
             match found {
                 Some(d) => {
                     let max_ch = max_channels(d, true).unwrap_or(0);
@@ -183,7 +181,7 @@ pub fn resolve_devices(
                     return Err(crate::error::AppError::config(format!(
                         "device alias \"{}\" uses CoreAudio device \"{}\" as input, \
                          but no matching input device was found. \
-                         Run `audiorouter --list-devices`.",
+                         Run `audiorouter list-devices`.",
                         role.name, dev_name
                     )));
                 }
@@ -191,9 +189,7 @@ pub fn resolve_devices(
         }
 
         if role.needs_output {
-            let found = output_devices
-                .iter()
-                .find(|d| d.name().map(|n| &n == dev_name).unwrap_or(false));
+            let found = output_devices.iter().find(|d| &d.to_string() == dev_name);
             match found {
                 Some(d) => {
                     let max_ch = max_channels(d, false).unwrap_or(0);
@@ -217,7 +213,7 @@ pub fn resolve_devices(
                     return Err(crate::error::AppError::config(format!(
                         "device alias \"{}\" uses CoreAudio device \"{}\" as output, \
                          but no matching output device was found. \
-                         Run `audiorouter --list-devices`.",
+                         Run `audiorouter list-devices`.",
                         role.name, dev_name
                     )));
                 }
@@ -226,12 +222,8 @@ pub fn resolve_devices(
 
         // Devices not used by any route: check connectivity, warn if absent.
         if !role.needs_input && !role.needs_output {
-            let found_as_input = input_devices
-                .iter()
-                .any(|d| d.name().map(|n| &n == dev_name).unwrap_or(false));
-            let found_as_output = output_devices
-                .iter()
-                .any(|d| d.name().map(|n| &n == dev_name).unwrap_or(false));
+            let found_as_input = input_devices.iter().any(|d| &d.to_string() == dev_name);
+            let found_as_output = output_devices.iter().any(|d| &d.to_string() == dev_name);
             if !found_as_input && !found_as_output {
                 connect_warnings.push(format!(
                     "device \"{}\" (\"{}\") is not currently connected",
@@ -276,16 +268,16 @@ pub fn find_stream_config(
     let supported_configs = supported_configs(device, is_input)?;
 
     for config_range in supported_configs {
-        let min = config_range.min_sample_rate().0;
-        let max = config_range.max_sample_rate().0;
+        let min = config_range.min_sample_rate();
+        let max = config_range.max_sample_rate();
         if sample_rate >= min && sample_rate <= max {
-            return Ok(config_range.with_sample_rate(SampleRate(sample_rate)));
+            return Ok(config_range.with_sample_rate(sample_rate));
         }
     }
 
     anyhow::bail!(
         "no supported config found for device \"{}\" at {} Hz",
-        device.name().unwrap_or_else(|_| "<unknown>".into()),
+        device,
         sample_rate
     )
 }
@@ -314,7 +306,7 @@ fn supports_sample_rate(device: &Device, is_input: bool, rate: u32) -> bool {
         return true;
     };
     for c in configs {
-        if rate >= c.min_sample_rate().0 && rate <= c.max_sample_rate().0 {
+        if rate >= c.min_sample_rate() && rate <= c.max_sample_rate() {
             return true;
         }
     }
@@ -347,7 +339,7 @@ pub fn verify_device_openable(
     let config = find_stream_config(device, is_input, sample_rate, 256)?;
     let stream_config = cpal::StreamConfig {
         channels: config.channels(),
-        sample_rate: SampleRate(sample_rate),
+        sample_rate,
         buffer_size: cpal::BufferSize::Default,
     };
 
@@ -356,19 +348,19 @@ pub fn verify_device_openable(
     if is_input {
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream::<f32, _, _>(
-                &stream_config,
+                stream_config,
                 |_d: &[f32], _i: &cpal::InputCallbackInfo| {},
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::I16 => device.build_input_stream::<i16, _, _>(
-                &stream_config,
+                stream_config,
                 |_d: &[i16], _i: &cpal::InputCallbackInfo| {},
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::U16 => device.build_input_stream::<u16, _, _>(
-                &stream_config,
+                stream_config,
                 |_d: &[u16], _i: &cpal::InputCallbackInfo| {},
                 err_fn,
                 None,
@@ -380,19 +372,19 @@ pub fn verify_device_openable(
     } else {
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_output_stream::<f32, _, _>(
-                &stream_config,
+                stream_config,
                 |_d: &mut [f32], _i: &cpal::OutputCallbackInfo| {},
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::I16 => device.build_output_stream::<i16, _, _>(
-                &stream_config,
+                stream_config,
                 |_d: &mut [i16], _i: &cpal::OutputCallbackInfo| {},
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::U16 => device.build_output_stream::<u16, _, _>(
-                &stream_config,
+                stream_config,
                 |_d: &mut [u16], _i: &cpal::OutputCallbackInfo| {},
                 err_fn,
                 None,

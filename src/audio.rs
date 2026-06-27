@@ -14,8 +14,7 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{
-    Device, InputCallbackInfo, OutputCallbackInfo, Sample, SampleFormat, SampleRate, Stream,
-    StreamConfig,
+    Device, InputCallbackInfo, OutputCallbackInfo, Sample, SampleFormat, Stream, StreamConfig,
 };
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::*};
 
@@ -104,7 +103,7 @@ pub fn run_audio(
 
         let stream_config = StreamConfig {
             channels: supported.channels(),
-            sample_rate: SampleRate(sample_rate),
+            sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
@@ -119,7 +118,7 @@ pub fn run_audio(
 
         let stream = build_input_stream(
             &resolved_dev.device,
-            &stream_config,
+            stream_config,
             sample_format,
             producers,
             &fatal_error,
@@ -160,7 +159,7 @@ pub fn run_audio(
 
         let stream_config = StreamConfig {
             channels: supported.channels(),
-            sample_rate: SampleRate(sample_rate),
+            sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
@@ -195,7 +194,7 @@ pub fn run_audio(
 
         let stream = build_output_stream(
             &resolved_dev.device,
-            &stream_config,
+            stream_config,
             sample_format,
             out_channels,
             consumers,
@@ -340,7 +339,9 @@ fn self_restart(config_path: &std::path::Path) {
 
     let config_str = config_path.to_string_lossy().into_owned();
 
-    let err = std::process::Command::new(&exe).arg(&config_str).exec();
+    let err = std::process::Command::new(&exe)
+        .args(["-c", &config_str])
+        .exec();
 
     // exec only returns on failure.
     ui::error(format!("restart failed: {err}"));
@@ -379,8 +380,8 @@ fn find_config_for(
 
     let mut best: Option<cpal::SupportedStreamConfigRange> = None;
     for range in &configs {
-        let min = range.min_sample_rate().0;
-        let max = range.max_sample_rate().0;
+        let min = range.min_sample_rate();
+        let max = range.max_sample_rate();
         if sample_rate >= min
             && sample_rate <= max
             && range.channels() >= desired_channels as u16
@@ -394,8 +395,8 @@ fn find_config_for(
 
     if best.is_none() {
         for range in &configs {
-            let min = range.min_sample_rate().0;
-            let max = range.max_sample_rate().0;
+            let min = range.min_sample_rate();
+            let max = range.max_sample_rate();
             if sample_rate >= min && sample_rate <= max {
                 best = Some(*range);
                 break;
@@ -410,18 +411,18 @@ fn find_config_for(
         )
     })?;
 
-    Ok(range.with_sample_rate(SampleRate(sample_rate)))
+    Ok(range.with_sample_rate(sample_rate))
 }
 
 // ─── Input stream ────────────────────────────────────────────────────────
 
 fn build_input_stream(
     device: &Device,
-    config: &StreamConfig,
+    config: StreamConfig,
     sample_format: SampleFormat,
     producers: Vec<HeapProd<f32>>,
     fatal_error: &Arc<AtomicBool>,
-) -> Result<Stream, cpal::BuildStreamError> {
+) -> Result<Stream, cpal::Error> {
     let fatal = fatal_error.clone();
     let err_fn = move |err| {
         ui::error(format!("input stream: {err}"));
@@ -463,7 +464,7 @@ fn build_input_stream(
             err_fn,
             None,
         )?,
-        _ => return Err(cpal::BuildStreamError::StreamConfigNotSupported),
+        _ => return Err(cpal::Error::new(cpal::ErrorKind::UnsupportedConfig)),
     };
 
     Ok(stream)
@@ -490,14 +491,14 @@ fn input_callback<T: ToF32>(data: &[T], producers: &Arc<Mutex<Vec<HeapProd<f32>>
 #[allow(clippy::too_many_arguments)]
 fn build_output_stream(
     device: &Device,
-    config: &StreamConfig,
+    config: StreamConfig,
     sample_format: SampleFormat,
     out_channels: usize,
     consumers: Vec<ConsumerEntry>,
     route_meta: Vec<RouteMixMeta>,
     limiter: bool,
     fatal_error: &Arc<AtomicBool>,
-) -> Result<Stream, cpal::BuildStreamError> {
+) -> Result<Stream, cpal::Error> {
     let fatal = fatal_error.clone();
     let err_fn = move |err| {
         ui::error(format!("output stream: {err}"));
@@ -539,7 +540,7 @@ fn build_output_stream(
             err_fn,
             None,
         )?,
-        _ => return Err(cpal::BuildStreamError::StreamConfigNotSupported),
+        _ => return Err(cpal::Error::new(cpal::ErrorKind::UnsupportedConfig)),
     };
 
     Ok(stream)
