@@ -45,12 +45,11 @@ jobs:
         with:
           fetch-depth: 0   # needed so git describe resolves the tag in build.rs
 
-      - name: Set version from tag
+      - name: Set version env
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "Setting version to ${VERSION}"
-          bash scripts/set-version.sh "${VERSION}"
+          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Install ALSA headers (Linux)
         if: runner.os == 'Linux'
