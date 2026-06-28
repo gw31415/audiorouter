@@ -2,6 +2,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/audiorouter.svg)](https://crates.io/crates/audiorouter)
 
+![demo](assets/demo.gif)
+
 A cross-platform command-line audio router. Reads a TOML configuration file, opens named audio devices, remaps and mixes audio channels in real time, and writes the result into virtual or physical output devices.
 
 ## Features

@@ -1,0 +1,15 @@
+[[devices]]
+name = "mic"
+device = "MacBook Airのマイク"
+
+[[devices]]
+name = "out"
+device = "BlackHole 2ch"
+limiter = true
+
+[[routes]]
+from = "mic"
+to = "out"
+from_channels = [1, 1]
+to_channels   = [1, 2]
+gain_db = -2.0
