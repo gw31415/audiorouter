@@ -15,10 +15,8 @@ A cross-platform command-line audio router. Reads a TOML configuration file, ope
 ## Installation
 
 ```sh
-cargo install --path .
+cargo binstall audiorouter
 ```
-
-Requires Rust 1.85 or later (edition 2024).
 
 ## Quick Start
 
