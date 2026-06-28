@@ -17,7 +17,7 @@
 //! ├────────────────────────────────────────────────────────┤
 //! │ Log / warnings                                        │
 //! ├────────────────────────────────────────────────────────┤
-//! │ [q]quit [r]reload [R]reset peaks [↑↓]scroll [Esc]quit │
+//! │ [q]quit [r]reload [^L]reset peaks [↑↓]scroll [Esc]quit │
 //! └────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -138,7 +138,11 @@ fn run_loop(
                     // Manual reload trigger.
                     st.reload_pending = Some(Instant::now());
                 }
-                KeyCode::Char('R') => {
+                KeyCode::Char('l')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
                     // Reset all peak-hold / clip indicators.
                     engine.meter_bank().reset_all_peaks();
                     st.log_lines.push(format!(
@@ -1172,7 +1176,7 @@ fn draw_help(f: &mut ratatui::Frame<'_>, area: Rect) {
         Span::raw(" quit  "),
         Span::styled("[r]", key),
         Span::raw(" reload  "),
-        Span::styled("[R]", key),
+        Span::styled("[^L]", key),
         Span::raw(" reset peaks  "),
         Span::styled("[h]", key),
         Span::raw(" toggle inactive  "),
