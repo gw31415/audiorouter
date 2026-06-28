@@ -382,8 +382,8 @@ fn draw_status_bar(
     let secs = elapsed.as_secs() % 60;
 
     let title = format!(
-        " audiorouter · {} Hz · buffer {} · ↑{}m{:02}s · {}/{} routes ",
-        plan.config.engine.sample_rate,
+        " 🎛 audiorouter  \u{2502}  \u{1f3b5} {}kHz  \u{2502}  \u{1f39a} buf {}  \u{2502}  \u{23f1} {}m{:02}s  \u{2502}  \u{1f517} {}/{} ",
+        plan.config.engine.sample_rate / 1000,
         plan.config.engine.buffer_size,
         mins,
         secs,
@@ -455,9 +455,19 @@ fn draw_routing_graph(
     show_inactive: bool,
     show_missing: bool,
 ) {
+    // Build title showing current toggle/filter state with icons.
+    let mut title_parts = vec!["\u{1f500} Routing Graph".to_string()]; // 🔀
+    if !show_inactive {
+        title_parts.push("\u{1f648} inactive hidden".to_string()); // 🙈
+    }
+    if !show_missing {
+        title_parts.push("\u{1f6ab} missing hidden".to_string()); // 🚫
+    }
+    let title = format!(" {} ", title_parts.join("  \u{2502}  "));
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .title_top(" Routing Graph ".bold());
+        .title_top(title.bold());
     f.render_widget(&block, area);
     let inner = block.inner(area);
     if inner.height < 5 || inner.width < 20 {
@@ -1153,56 +1163,24 @@ fn contains_log_level(s: &str, level: &str) -> bool {
 // ── Help bar ───────────────────────────────────────────────────────────────
 
 fn draw_help(f: &mut ratatui::Frame<'_>, area: Rect) {
+    let key = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     let help = Paragraph::new(Line::from(vec![
         Span::raw(" "),
-        Span::styled(
-            "[q]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[q]", key),
         Span::raw(" quit  "),
-        Span::styled(
-            "[r]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[r]", key),
         Span::raw(" reload  "),
-        Span::styled(
-            "[R]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[R]", key),
         Span::raw(" reset peaks  "),
-        Span::styled(
-            "[h]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[h]", key),
         Span::raw(" toggle inactive  "),
-        Span::styled(
-            "[H]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[H]", key),
         Span::raw(" toggle missing  "),
-        Span::styled(
-            "[↑↓]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[↑↓]", key),
         Span::raw(" scroll log  "),
-        Span::styled(
-            "[Esc]",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("[Esc]", key),
         Span::raw(" quit  "),
     ]));
     f.render_widget(help, area);
