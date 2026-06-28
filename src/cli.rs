@@ -38,7 +38,7 @@ pub struct Cli {
 /// Operating modes, selected by subcommand.
 ///
 /// When no subcommand is given, [`Command::Run`] is assumed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     /// Start audio routing (default when no subcommand is given).
     Run,
@@ -53,13 +53,26 @@ pub enum Command {
 
     /// Print the resolved configuration path, then exit.
     ConfigPath,
+
+    /// Generate a shell completion script.
+    ///
+    /// Writes to stdout by default; use --output to write to a file instead.
+    /// When no shell is given the current shell is detected from $SHELL.
+    Completions {
+        /// Shell to generate completions for [default: current $SHELL].
+        shell: Option<clap_complete::Shell>,
+
+        /// Output file [default: stdout].
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 impl Cli {
     /// Return the resolved command, defaulting to [`Command::Run`] when
     /// no subcommand was specified.
     pub fn command_or_default(&self) -> Command {
-        self.command.unwrap_or(Command::Run)
+        self.command.clone().unwrap_or(Command::Run)
     }
 }
 

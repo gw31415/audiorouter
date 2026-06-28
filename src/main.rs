@@ -33,10 +33,10 @@ fn main() -> ExitCode {
     let matches = Cli::command().version(APP_VERSION).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let command = cli.command_or_default();
-    let interactive = is_interactive_run(command);
+    let interactive = is_interactive_run(&command);
 
     // Initialize logging level and destination.
-    init_logging(&cli, command, interactive);
+    init_logging(&cli, &command, interactive);
 
     match dispatch(&cli, command, interactive) {
         Ok(()) => ExitCode::SUCCESS,
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn init_logging(cli: &Cli, command: Command, interactive: bool) {
+fn init_logging(cli: &Cli, command: &Command, interactive: bool) {
     use tracing_subscriber::EnvFilter;
 
     let default_level = if cli.quiet {
@@ -81,7 +81,7 @@ fn init_logging(cli: &Cli, command: Command, interactive: bool) {
         .init();
 }
 
-fn is_interactive_run(command: Command) -> bool {
+fn is_interactive_run(command: &Command) -> bool {
     matches!(command, Command::Run)
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
@@ -93,6 +93,73 @@ fn dispatch(cli: &Cli, command: Command, interactive: bool) -> Result<(), AppErr
         Command::ListDevices => run_list_devices(),
         Command::Check => run_check(cli),
         Command::Run => run_run(cli, interactive),
+        Command::Completions { shell, output } => run_completions(shell, output.as_deref()),
+    }
+}
+
+fn run_completions(
+    shell: Option<clap_complete::Shell>,
+    output: Option<&std::path::Path>,
+) -> Result<(), AppError> {
+    use clap::CommandFactory;
+    use clap_complete::generate;
+    use std::io::Write;
+
+    let shell = shell.or_else(detect_shell).ok_or_else(|| {
+        AppError::runtime("could not detect current shell; pass one explicitly: bash, fish, zsh, …")
+    })?;
+
+    let mut cmd = Cli::command().version(APP_VERSION);
+
+    if output.map_or(true, |p| p == std::path::Path::new("-")) {
+        // stdout: wrap to silently swallow BrokenPipe so `| head` etc. don't panic.
+        struct BrokenPipeSink<W: Write>(W);
+        impl<W: Write> Write for BrokenPipeSink<W> {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                match self.0.write(buf) {
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(buf.len()),
+                    r => r,
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                match self.0.flush() {
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+                    r => r,
+                }
+            }
+        }
+        generate(
+            shell,
+            &mut cmd,
+            "audiorouter",
+            &mut BrokenPipeSink(std::io::stdout()),
+        );
+    } else {
+        let path = output.unwrap();
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AppError::runtime(format!("cannot create {}: {e}", parent.display()))
+            })?;
+        }
+        let mut file = std::fs::File::create(path)
+            .map_err(|e| AppError::runtime(format!("cannot create {}: {e}", path.display())))?;
+        generate(shell, &mut cmd, "audiorouter", &mut file);
+        file.flush().ok();
+        ui::success(path.display().to_string());
+    }
+    Ok(())
+}
+
+fn detect_shell() -> Option<clap_complete::Shell> {
+    use clap_complete::Shell;
+    let path = std::env::var("SHELL").ok()?;
+    match std::path::Path::new(&path).file_name()?.to_str()? {
+        "bash" => Some(Shell::Bash),
+        "fish" => Some(Shell::Fish),
+        "zsh" => Some(Shell::Zsh),
+        "elvish" => Some(Shell::Elvish),
+        "powershell" | "pwsh" => Some(Shell::PowerShell),
+        _ => None,
     }
 }
 
