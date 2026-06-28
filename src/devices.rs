@@ -385,6 +385,18 @@ pub fn resolve_devices(
             continue;
         }
 
+        // Probe physical channel counts for the unused direction (display only, never fails).
+        if max_in_ch == 0 {
+            if let Some(d) = input_devices.iter().find(|d| &d.to_string() == dev_name) {
+                max_in_ch = max_channels(d, true).unwrap_or(0);
+            }
+        }
+        if max_out_ch == 0 {
+            if let Some(d) = output_devices.iter().find(|d| &d.to_string() == dev_name) {
+                max_out_ch = max_channels(d, false).unwrap_or(0);
+            }
+        }
+
         let device = cpal_input_device
             .or(cpal_output_device)
             .expect("at least one role must be active");
