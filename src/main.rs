@@ -5,13 +5,16 @@ mod cli;
 mod config;
 mod devices;
 mod error;
+mod log_buffer;
 mod meter;
 mod mixer;
 mod tui;
 mod ui;
 mod validate;
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::Parser;
 
@@ -22,11 +25,13 @@ use crate::validate::validate_config;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let command = cli.command_or_default();
+    let interactive = is_interactive_run(command);
 
-    // Initialize logging level.
-    init_logging(&cli);
+    // Initialize logging level and destination.
+    init_logging(&cli, command, interactive);
 
-    match dispatch(&cli, cli.command_or_default()) {
+    match dispatch(&cli, command, interactive) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             ui::error(&e.message);
@@ -35,7 +40,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn init_logging(cli: &Cli) {
+fn init_logging(cli: &Cli, command: Command, interactive: bool) {
     use tracing_subscriber::EnvFilter;
 
     let default_level = if cli.quiet {
@@ -50,6 +55,18 @@ fn init_logging(cli: &Cli) {
 
     let filter = EnvFilter::try_new(default_level).unwrap_or_else(|_| EnvFilter::new("warn"));
 
+    if matches!(command, Command::Run) && interactive {
+        log_buffer::init();
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .with_ansi(false)
+            .compact()
+            .with_writer(log_buffer::TuiLogMakeWriter)
+            .init();
+        return;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -57,12 +74,18 @@ fn init_logging(cli: &Cli) {
         .init();
 }
 
-fn dispatch(cli: &Cli, command: Command) -> Result<(), AppError> {
+fn is_interactive_run(command: Command) -> bool {
+    matches!(command, Command::Run)
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+}
+
+fn dispatch(cli: &Cli, command: Command, interactive: bool) -> Result<(), AppError> {
     match command {
         Command::ConfigPath => run_print_config_path(cli),
         Command::ListDevices => run_list_devices(),
         Command::Check => run_check(cli),
-        Command::Run => run_run(cli),
+        Command::Run => run_run(cli, interactive),
     }
 }
 
@@ -102,16 +125,16 @@ fn run_check(cli: &Cli) -> Result<(), AppError> {
     // Print success summary.
     ui::success(format!(
         "config ok — {} devices, {} routes, {} Hz, buffer {}",
-        plan.devices.len(),
-        plan.routes.len(),
+        resolved.devices.len(),
+        resolved.active_route_count(&plan),
         plan.config.engine.sample_rate,
         plan.config.engine.buffer_size,
     ));
 
     ui::separator();
 
-    let inputs: Vec<&str> = plan.input_device_names();
-    let outputs: Vec<&str> = plan.output_device_names();
+    let inputs: Vec<&str> = resolved.input_device_names();
+    let outputs: Vec<&str> = resolved.output_device_names();
 
     if !inputs.is_empty() {
         ui::header("Inputs");
@@ -148,7 +171,7 @@ fn run_check(cli: &Cli) -> Result<(), AppError> {
     Ok(())
 }
 
-fn run_run(cli: &Cli) -> Result<(), AppError> {
+fn run_run(cli: &Cli, interactive: bool) -> Result<(), AppError> {
     let path = resolve_config_path(cli.config.as_deref())
         .map_err(|e| AppError::runtime(format!("cannot resolve config path: {e}")))?;
 
@@ -157,16 +180,18 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
         AppError::config(format!("config validation failed:\n{}", errors.join("\n")))
     })?;
 
-    // Print config warnings.
-    for w in &plan.warnings {
-        ui::warning(w);
+    if !interactive {
+        for w in &plan.warnings {
+            ui::warning(w);
+        }
     }
 
     let resolved = devices::resolve_devices(&plan)?;
 
-    // Print device connectivity warnings.
-    for w in &resolved.connect_warnings {
-        ui::warning(w);
+    if !interactive {
+        for w in &resolved.connect_warnings {
+            ui::warning(w);
+        }
     }
 
     // Collect warnings to pass to TUI.
@@ -176,8 +201,43 @@ fn run_run(cli: &Cli) -> Result<(), AppError> {
     // Build the audio engine.
     let engine = audio::AudioEngine::new(plan, resolved, &path)?;
 
-    // Run the TUI event loop (handles its own Ctrl-C / quit).
-    tui::run(engine, &path, &warnings)?;
+    if interactive {
+        // Run the TUI event loop (handles its own Ctrl-C / quit).
+        tui::run(engine, &path, &warnings)?;
+    } else {
+        run_headless(engine)?;
+    }
 
+    Ok(())
+}
+
+fn run_headless(mut engine: audio::AudioEngine) -> Result<(), AppError> {
+    tracing::info!("audiorouter started in non-interactive mode");
+
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let running_for_handler = running.clone();
+    ctrlc::set_handler(move || {
+        running_for_handler.store(false, std::sync::atomic::Ordering::SeqCst);
+    })
+    .map_err(|e| AppError::runtime(format!("failed to install Ctrl-C handler: {e}")))?;
+
+    while running.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_secs(1));
+
+        for event in engine.refresh_devices()? {
+            tracing::info!("{event}");
+        }
+
+        match engine.state() {
+            audio::EngineState::Running => {}
+            audio::EngineState::Stopped => break,
+            audio::EngineState::FatalError => {
+                return Err(AppError::runtime("fatal audio stream error"));
+            }
+        }
+    }
+
+    engine.stop();
+    tracing::info!("audiorouter stopped");
     Ok(())
 }

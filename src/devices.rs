@@ -2,7 +2,7 @@
 //!
 //! This module bridges the validated config plan to actual CoreAudio devices.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Host, SupportedStreamConfig, SupportedStreamConfigRange};
@@ -112,6 +112,85 @@ pub struct ResolvedAudioDevices {
     pub devices: HashMap<String, ResolvedDevice>,
     /// Warnings about config-defined devices that are not currently connected.
     pub connect_warnings: Vec<String>,
+    /// Route indices disabled because at least one endpoint device is not connected.
+    pub disabled_route_indices: HashSet<usize>,
+    /// Route-referenced input aliases that are currently unavailable.
+    pub unavailable_inputs: HashSet<String>,
+    /// Route-referenced output aliases that are currently unavailable.
+    pub unavailable_outputs: HashSet<String>,
+}
+
+impl ResolvedAudioDevices {
+    /// Returns true when the route at `index` is active for stream construction.
+    pub fn route_enabled(&self, index: usize) -> bool {
+        !self.disabled_route_indices.contains(&index)
+    }
+
+    /// Number of active routes after connectivity pruning.
+    pub fn active_route_count(&self, plan: &ValidatedConfig) -> usize {
+        plan.routes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.route_enabled(*i))
+            .count()
+    }
+
+    /// All resolved device aliases that need an input stream.
+    pub fn input_device_names(&self) -> Vec<&str> {
+        self.devices
+            .values()
+            .filter(|d| d.is_input)
+            .map(|d| d.alias.as_str())
+            .collect()
+    }
+
+    /// All resolved device aliases that need an output stream.
+    pub fn output_device_names(&self) -> Vec<&str> {
+        self.devices
+            .values()
+            .filter(|d| d.is_output)
+            .map(|d| d.alias.as_str())
+            .collect()
+    }
+
+    /// Human-readable device connectivity changes between two resolutions.
+    pub fn connectivity_events(
+        &self,
+        next: &ResolvedAudioDevices,
+        plan: &ValidatedConfig,
+    ) -> Vec<String> {
+        let mut events = Vec::new();
+
+        for alias in self.unavailable_inputs.difference(&next.unavailable_inputs) {
+            events.push(format_device_event(plan, alias, "input", "connected"));
+        }
+        for alias in next.unavailable_inputs.difference(&self.unavailable_inputs) {
+            events.push(format_device_event(plan, alias, "input", "disconnected"));
+        }
+        for alias in self
+            .unavailable_outputs
+            .difference(&next.unavailable_outputs)
+        {
+            events.push(format_device_event(plan, alias, "output", "connected"));
+        }
+        for alias in next
+            .unavailable_outputs
+            .difference(&self.unavailable_outputs)
+        {
+            events.push(format_device_event(plan, alias, "output", "disconnected"));
+        }
+
+        events.sort();
+        events
+    }
+}
+
+fn format_device_event(plan: &ValidatedConfig, alias: &str, side: &str, state: &str) -> String {
+    let device = plan
+        .device_by_name(alias)
+        .map(|role| role.device.as_str())
+        .unwrap_or(alias);
+    format!("device \"{alias}\" (\"{device}\") {state} as {side}")
 }
 
 /// Resolve all devices in the validated config against actual CPAL devices.
@@ -128,9 +207,10 @@ pub struct ResolvedAudioDevices {
 ///
 /// # Errors
 ///
-/// Returns a `Config` error if a route-referenced device cannot be found or
-/// has insufficient channels. Returns a `Runtime` error for CPAL enumeration
-/// failures.
+/// Missing route-referenced devices are warnings, not errors: every route that
+/// uses the missing input/output side is disabled. Still returns a `Config`
+/// error when a connected device has insufficient channels or an unsupported
+/// sample rate. Returns a `Runtime` error for CPAL enumeration failures.
 pub fn resolve_devices(
     plan: &ValidatedConfig,
 ) -> Result<ResolvedAudioDevices, crate::error::AppError> {
@@ -147,6 +227,52 @@ pub fn resolve_devices(
 
     let mut resolved: HashMap<String, ResolvedDevice> = HashMap::new();
     let mut connect_warnings: Vec<String> = Vec::new();
+    let mut unavailable_inputs: HashSet<String> = HashSet::new();
+    let mut unavailable_outputs: HashSet<String> = HashSet::new();
+
+    // First pass: identify route endpoint sides that are currently missing.
+    // Missing input disables routes that read from that alias; missing output
+    // disables routes that write to that alias. If the same device is still
+    // available in the opposite direction, routes using that side may continue.
+    for role in &plan.devices {
+        let dev_name = &role.device;
+
+        if role.needs_input && !input_devices.iter().any(|d| &d.to_string() == dev_name) {
+            unavailable_inputs.insert(role.name.clone());
+            connect_warnings.push(format!(
+                "device \"{}\" (\"{}\") is not currently connected as input; related routes disabled",
+                role.name, dev_name
+            ));
+        }
+
+        if role.needs_output && !output_devices.iter().any(|d| &d.to_string() == dev_name) {
+            unavailable_outputs.insert(role.name.clone());
+            connect_warnings.push(format!(
+                "device \"{}\" (\"{}\") is not currently connected as output; related routes disabled",
+                role.name, dev_name
+            ));
+        }
+    }
+
+    let disabled_route_indices: HashSet<usize> = plan
+        .routes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, route)| {
+            if unavailable_inputs.contains(&route.from) || unavailable_outputs.contains(&route.to) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !disabled_route_indices.is_empty() {
+        connect_warnings.push(format!(
+            "{} route(s) disabled because required audio devices are not connected",
+            disabled_route_indices.len()
+        ));
+    }
 
     for role in &plan.devices {
         let dev_name = &role.device;
@@ -156,16 +282,45 @@ pub fn resolve_devices(
         let mut cpal_output_device: Option<Device> = None;
         let mut max_out_ch: u16 = 0;
 
-        if role.needs_input {
+        let active_input_routes: Vec<_> = plan
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| !disabled_route_indices.contains(i) && r.from == role.name)
+            .map(|(_, r)| r)
+            .collect();
+        let active_output_routes: Vec<_> = plan
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| !disabled_route_indices.contains(i) && r.to == role.name)
+            .map(|(_, r)| r)
+            .collect();
+        let needs_input = !active_input_routes.is_empty();
+        let needs_output = !active_output_routes.is_empty();
+        let required_input_channels = active_input_routes
+            .iter()
+            .flat_map(|r| r.from_channels.iter())
+            .copied()
+            .max()
+            .unwrap_or(0);
+        let required_output_channels = active_output_routes
+            .iter()
+            .flat_map(|r| r.to_channels.iter())
+            .copied()
+            .max()
+            .unwrap_or(0);
+
+        if needs_input {
             let found = input_devices.iter().find(|d| &d.to_string() == dev_name);
             match found {
                 Some(d) => {
                     let max_ch = max_channels(d, true).unwrap_or(0);
-                    if max_ch < role.required_input_channels as u16 {
+                    if max_ch < required_input_channels as u16 {
                         return Err(crate::error::AppError::config(format!(
                             "device alias \"{}\" uses CoreAudio device \"{}\" as input requiring {} channel(s), \
                              but only {} input channel(s) are available",
-                            role.name, dev_name, role.required_input_channels, max_ch
+                            role.name, dev_name, required_input_channels, max_ch
                         )));
                     }
                     if !supports_sample_rate(d, true, sample_rate) {
@@ -177,27 +332,20 @@ pub fn resolve_devices(
                     max_in_ch = max_ch;
                     cpal_input_device = Some(d.clone());
                 }
-                None => {
-                    return Err(crate::error::AppError::config(format!(
-                        "device alias \"{}\" uses CoreAudio device \"{}\" as input, \
-                         but no matching input device was found. \
-                         Run `audiorouter list-devices`.",
-                        role.name, dev_name
-                    )));
-                }
+                None => continue,
             }
         }
 
-        if role.needs_output {
+        if needs_output {
             let found = output_devices.iter().find(|d| &d.to_string() == dev_name);
             match found {
                 Some(d) => {
                     let max_ch = max_channels(d, false).unwrap_or(0);
-                    if max_ch < role.required_output_channels as u16 {
+                    if max_ch < required_output_channels as u16 {
                         return Err(crate::error::AppError::config(format!(
                             "output device \"{}\" resolved to \"{}\", \
                              but route requires output channel {}",
-                            role.name, dev_name, role.required_output_channels
+                            role.name, dev_name, required_output_channels
                         )));
                     }
                     if !supports_sample_rate(d, false, sample_rate) {
@@ -209,19 +357,15 @@ pub fn resolve_devices(
                     max_out_ch = max_ch;
                     cpal_output_device = Some(d.clone());
                 }
-                None => {
-                    return Err(crate::error::AppError::config(format!(
-                        "device alias \"{}\" uses CoreAudio device \"{}\" as output, \
-                         but no matching output device was found. \
-                         Run `audiorouter list-devices`.",
-                        role.name, dev_name
-                    )));
-                }
+                None => continue,
             }
         }
 
         // Devices not used by any route: check connectivity, warn if absent.
-        if !role.needs_input && !role.needs_output {
+        if !needs_input && !needs_output {
+            if unavailable_inputs.contains(&role.name) || unavailable_outputs.contains(&role.name) {
+                continue;
+            }
             let found_as_input = input_devices.iter().any(|d| &d.to_string() == dev_name);
             let found_as_output = output_devices.iter().any(|d| &d.to_string() == dev_name);
             if !found_as_input && !found_as_output {
@@ -243,8 +387,8 @@ pub fn resolve_devices(
                 alias: role.name.clone(),
                 name: role.device.clone(),
                 device,
-                is_input: role.needs_input,
-                is_output: role.needs_output,
+                is_input: needs_input,
+                is_output: needs_output,
                 max_input_channels: max_in_ch,
                 max_output_channels: max_out_ch,
             },
@@ -254,6 +398,9 @@ pub fn resolve_devices(
     Ok(ResolvedAudioDevices {
         devices: resolved,
         connect_warnings,
+        disabled_route_indices,
+        unavailable_inputs,
+        unavailable_outputs,
     })
 }
 

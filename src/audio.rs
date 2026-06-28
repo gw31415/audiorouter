@@ -23,7 +23,6 @@ use ringbuf::{HeapCons, HeapProd, HeapRb, traits::*};
 
 use crate::meter::MeterBank;
 use crate::mixer::{db_to_linear, hard_limit_buffer, mix_route_interleaved};
-use crate::ui;
 use crate::validate::ValidatedConfig;
 
 // ─── AudioEngine ───────────────────────────────────────────────────────────
@@ -93,6 +92,11 @@ impl AudioEngine {
         &self.plan
     }
 
+    /// Current CoreAudio device resolution, including runtime-disabled routes.
+    pub fn resolved(&self) -> &crate::devices::ResolvedAudioDevices {
+        &self.resolved
+    }
+
     /// Signal the engine to stop.
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
@@ -144,6 +148,29 @@ impl AudioEngine {
         Ok(())
     }
 
+    /// Re-scan CoreAudio devices while running and rebuild streams if device
+    /// connectivity changed. Returns connection/disconnection log messages.
+    ///
+    /// Unlike startup, this does not surface missing-device warnings. A device
+    /// disappearing or reappearing during normal operation is represented only
+    /// as a connectivity event in the TUI log.
+    pub fn refresh_devices(&mut self) -> Result<Vec<String>, crate::error::AppError> {
+        let new_resolved = crate::devices::resolve_devices(&self.plan)?;
+        let events = self.resolved.connectivity_events(&new_resolved, &self.plan);
+        let route_state_changed =
+            self.resolved.disabled_route_indices != new_resolved.disabled_route_indices;
+
+        if events.is_empty() && !route_state_changed {
+            return Ok(Vec::new());
+        }
+
+        self.teardown_streams();
+        self.resolved = new_resolved;
+        self.open_all_streams()?;
+
+        Ok(events)
+    }
+
     /// Tear down all streams.
     fn teardown_streams(&mut self) {
         // Drop output first, then input, to minimise clicks.
@@ -167,6 +194,9 @@ impl AudioEngine {
         let buffer_size = self.plan.config.engine.buffer_size as usize;
 
         for (i, route) in self.plan.routes.iter().enumerate() {
+            if !self.resolved.route_enabled(i) {
+                continue;
+            }
             let from_device = &self.resolved.devices[&route.from];
             let channels = if from_device.is_input && from_device.max_input_channels > 0 {
                 from_device.max_input_channels as usize
@@ -187,7 +217,7 @@ impl AudioEngine {
         }
 
         // ─── Open input streams ─────────────────────────────────────────
-        for alias in self.plan.input_device_names() {
+        for alias in self.resolved.input_device_names() {
             let resolved_dev = &self.resolved.devices[alias];
 
             let route_indices: Vec<usize> = self
@@ -195,9 +225,13 @@ impl AudioEngine {
                 .routes
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.from == alias)
+                .filter(|(i, r)| self.resolved.route_enabled(*i) && r.from == alias)
                 .map(|(i, _)| i)
                 .collect();
+
+            if route_indices.is_empty() {
+                continue;
+            }
 
             let channels = route_input_channels[&route_indices[0]];
 
@@ -244,7 +278,7 @@ impl AudioEngine {
         }
 
         // ─── Open output streams ────────────────────────────────────────
-        for alias in self.plan.output_device_names() {
+        for alias in self.resolved.output_device_names() {
             let resolved_dev = &self.resolved.devices[alias];
 
             let route_indices: Vec<usize> = self
@@ -252,9 +286,13 @@ impl AudioEngine {
                 .routes
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.to == alias)
+                .filter(|(i, r)| self.resolved.route_enabled(*i) && r.to == alias)
                 .map(|(i, _)| i)
                 .collect();
+
+            if route_indices.is_empty() {
+                continue;
+            }
 
             let out_channels = resolved_dev.max_output_channels as usize;
             let supported = find_config_for(&resolved_dev.device, false, sample_rate, out_channels)
@@ -359,7 +397,7 @@ impl ConfigWatcher {
             let mut watcher = match notify::recommended_watcher(tx) {
                 Ok(w) => w,
                 Err(e) => {
-                    ui::warning(format!("config watch disabled: {e}"));
+                    tracing::warn!("config watch disabled: {e}");
                     return;
                 }
             };
@@ -368,7 +406,7 @@ impl ConfigWatcher {
 
             for watch_dir in config_watch_dirs(&watch_path, canonical_watch_path.as_deref()) {
                 if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
-                    ui::warning(format!("config watch disabled: {e}"));
+                    tracing::warn!("config watch disabled: {e}");
                     return;
                 }
             }
@@ -479,10 +517,9 @@ fn build_input_stream(
     device_alias: String,
     meter_bank: Arc<MeterBank>,
 ) -> Result<Stream, cpal::Error> {
-    let fatal = fatal_error.clone();
+    let _ = fatal_error;
     let err_fn = move |err| {
-        ui::error(format!("input stream: {err}"));
-        fatal.store(true, Ordering::SeqCst);
+        tracing::warn!("input stream error: {err}");
     };
 
     let producers = Arc::new(Mutex::new(producers));
@@ -612,10 +649,9 @@ fn build_output_stream(
     device_alias: String,
     meter_bank: Arc<MeterBank>,
 ) -> Result<Stream, cpal::Error> {
-    let fatal = fatal_error.clone();
+    let _ = fatal_error;
     let err_fn = move |err| {
-        ui::error(format!("output stream: {err}"));
-        fatal.store(true, Ordering::SeqCst);
+        tracing::warn!("output stream error: {err}");
     };
 
     let shared = Arc::new((Mutex::new(consumers), route_meta));

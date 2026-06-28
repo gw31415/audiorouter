@@ -45,24 +45,6 @@ impl ValidatedConfig {
     pub fn device_by_name(&self, name: &str) -> Option<&ResolvedDeviceRole> {
         self.devices.iter().find(|d| d.name == name)
     }
-
-    /// All device aliases that need an input stream.
-    pub fn input_device_names(&self) -> Vec<&str> {
-        self.devices
-            .iter()
-            .filter(|d| d.needs_input)
-            .map(|d| d.name.as_str())
-            .collect()
-    }
-
-    /// All device aliases that need an output stream.
-    pub fn output_device_names(&self) -> Vec<&str> {
-        self.devices
-            .iter()
-            .filter(|d| d.needs_output)
-            .map(|d| d.name.as_str())
-            .collect()
-    }
 }
 
 /// Run pure config validation, returning a [`ValidatedConfig`] or a list of

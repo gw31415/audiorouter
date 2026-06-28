@@ -44,6 +44,7 @@ use crate::validate::ValidatedConfig;
 
 const TICK_RATE: Duration = Duration::from_millis(50); // 20 fps UI refresh
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
+const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Run the TUI event loop over an audio engine until the user quits.
 ///
@@ -70,6 +71,7 @@ pub fn run(
         reload_pending: None,
         reload_message: None,
         last_tick: Instant::now(),
+        last_device_poll: Instant::now(),
     };
 
     // Result stored here so we can restore the terminal before returning.
@@ -95,6 +97,7 @@ struct LoopState {
     reload_pending: Option<Instant>,
     reload_message: Option<String>,
     last_tick: Instant,
+    last_device_poll: Instant,
 }
 
 const LOG_PANEL_HEIGHT: u16 = 7;
@@ -199,6 +202,35 @@ fn run_loop(
             }
         }
 
+        // Drain tracing output into the TUI log panel. In interactive run mode,
+        // the tracing subscriber writes to an in-memory buffer instead of
+        // stderr so it cannot overlap the ratatui alternate screen.
+        for line in crate::log_buffer::drain() {
+            st.log_lines
+                .push(format!("[{}] {line}", timestamp(start_time)));
+        }
+
+        // Poll physical device connectivity while running. Missing-device
+        // warnings are startup-only; runtime changes are logged as concise
+        // connected/disconnected events.
+        if st.last_device_poll.elapsed() >= DEVICE_POLL_INTERVAL {
+            st.last_device_poll = Instant::now();
+            match engine.refresh_devices() {
+                Ok(events) => {
+                    for event in events {
+                        st.log_lines
+                            .push(format!("[{}] {event}", timestamp(start_time)));
+                    }
+                }
+                Err(e) => {
+                    st.log_lines.push(format!(
+                        "[{}] device refresh failed: {e}",
+                        timestamp(start_time)
+                    ));
+                }
+            }
+        }
+
         // Check engine state.
         match engine.state() {
             EngineState::FatalError => {
@@ -259,13 +291,14 @@ fn draw(
         .draw(|f| {
             let plan = engine.plan();
             let meter_bank = engine.meter_bank();
+            let resolved = engine.resolved();
 
             // ── Top-level layout ──────────────────────────────────────
             let area = f.area();
 
             // Compact status bar for small terminals.
             if area.height < 16 {
-                draw_compact(f, area, engine, start_time, plan);
+                draw_compact(f, area, engine, start_time, plan, resolved);
                 return;
             }
 
@@ -279,8 +312,8 @@ fn draw(
                 ])
                 .split(area);
 
-            draw_status_bar(f, chunks[0], plan, start_time, reload_message);
-            draw_routing_graph(f, chunks[1], plan, meter_bank);
+            draw_status_bar(f, chunks[0], plan, resolved, start_time, reload_message);
+            draw_routing_graph(f, chunks[1], plan, resolved, meter_bank);
             draw_log(f, chunks[2], log_lines, scroll);
             draw_help(f, chunks[3]);
         })
@@ -295,6 +328,7 @@ fn draw_status_bar(
     f: &mut ratatui::Frame<'_>,
     area: Rect,
     plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
     start_time: Instant,
     _reload_message: &Option<String>,
 ) {
@@ -303,11 +337,12 @@ fn draw_status_bar(
     let secs = elapsed.as_secs() % 60;
 
     let title = format!(
-        " audiorouter · {} Hz · buffer {} · ↑{}m{:02}s · {} routes ",
+        " audiorouter · {} Hz · buffer {} · ↑{}m{:02}s · {}/{} routes ",
         plan.config.engine.sample_rate,
         plan.config.engine.buffer_size,
         mins,
         secs,
+        resolved.active_route_count(plan),
         plan.routes.len(),
     );
 
@@ -329,12 +364,14 @@ fn draw_compact(
     engine: &AudioEngine,
     start_time: Instant,
     plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
 ) {
     let mut lines = vec![Line::from(Span::styled(
         format!(
-            "audiorouter · {} Hz · {} routes · ↑{}s",
-            plan.config.engine.sample_rate,
+            "audiorouter · {}/{} routes · {} Hz · ↑{}s",
+            resolved.active_route_count(plan),
             plan.routes.len(),
+            plan.config.engine.sample_rate,
             start_time.elapsed().as_secs()
         ),
         Style::default()
@@ -342,14 +379,19 @@ fn draw_compact(
             .add_modifier(Modifier::BOLD),
     ))];
 
-    for route in &plan.routes {
+    for (i, route) in plan.routes.iter().enumerate() {
         let meter = engine.meter_bank().get(&route.from, 1);
         let level = meter.map(|m| m.snapshot().peak).unwrap_or(0.0);
         let bar_len = ((level * 10.0) as usize).min(10);
         let bar: String = "█".repeat(bar_len);
+        let prefix = if resolved.route_enabled(i) {
+            ""
+        } else {
+            "OFF "
+        };
         lines.push(Line::from(format!(
-            "{} → {} {:>6.1}dB {}",
-            route.from, route.to, route.gain_db, bar
+            "{}{} → {} {:>6.1}dB {}",
+            prefix, route.from, route.to, route.gain_db, bar
         )));
     }
 
@@ -363,6 +405,7 @@ fn draw_routing_graph(
     f: &mut ratatui::Frame<'_>,
     area: Rect,
     plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
     meter_bank: &crate::meter::MeterBank,
 ) {
     let block = Block::default()
@@ -448,7 +491,7 @@ fn draw_routing_graph(
     }
 
     // ── Draw edges first (so nodes overlap them) ──────────────────
-    for route in &plan.routes {
+    for (route_index, route) in plan.routes.iter().enumerate() {
         if let (Some(src), Some(dst)) = (
             nodes.iter().find(|n| n.alias == route.from),
             nodes.iter().find(|n| n.alias == route.to),
@@ -464,6 +507,7 @@ fn draw_routing_graph(
                 dst_left,
                 dst_mid_y,
                 route,
+                !resolved.route_enabled(route_index),
                 col_x[1] + col_w / 2,
             );
         }
@@ -492,7 +536,7 @@ fn draw_routing_graph(
     for node in &nodes {
         let dev = plan.device_by_name(&node.alias).unwrap();
         draw_device_node(
-            f, node.x, node.y, node_w, node_h, node, dev, plan, meter_bank,
+            f, node.x, node.y, node_w, node_h, node, dev, plan, resolved, meter_bank,
         );
     }
 }
@@ -513,6 +557,7 @@ enum DeviceRole {
 }
 
 /// Draw a smoothstep-style edge between two nodes using Unicode box-drawing chars.
+#[allow(clippy::too_many_arguments)]
 fn draw_edge(
     f: &mut ratatui::Frame<'_>,
     x1: u16,
@@ -520,15 +565,20 @@ fn draw_edge(
     x2: u16,
     y2: u16,
     route: &crate::validate::ValidatedRoute,
+    disabled: bool,
     mid_x: u16,
 ) {
-    let color = if route.mute {
+    let color = if disabled || route.mute {
         Color::DarkGray
     } else {
         Color::LightBlue
     };
+    let line_h = if disabled { "┄" } else { "─" };
+    let line_v = if disabled { "┆" } else { "│" };
 
-    let gain_label = if route.mute {
+    let gain_label = if disabled {
+        "OFF".to_string()
+    } else if route.mute {
         "X".to_string()
     } else {
         format!("{:+.1}dB", route.gain_db)
@@ -540,7 +590,7 @@ fn draw_edge(
         // Same row — straight line.
         for x in x1..x2 {
             f.buffer_mut()
-                .set_string(x, y1, "─", Style::default().fg(color));
+                .set_string(x, y1, line_h, Style::default().fg(color));
         }
     } else {
         // Step path: right from source → corner → vertical → corner → right to target.
@@ -550,7 +600,7 @@ fn draw_edge(
         // Horizontal from source to mid.
         for x in x1..half1 {
             f.buffer_mut()
-                .set_string(x, y1, "─", Style::default().fg(color));
+                .set_string(x, y1, line_h, Style::default().fg(color));
         }
         // Corner at source side.
         let corner1 = if y2 > y1 { "┌" } else { "└" };
@@ -561,7 +611,7 @@ fn draw_edge(
         let (vy_start, vy_end) = if y2 > y1 { (y1 + 1, y2) } else { (y2 + 1, y1) };
         for y in vy_start..vy_end {
             f.buffer_mut()
-                .set_string(half1, y, "│", Style::default().fg(color));
+                .set_string(half1, y, line_v, Style::default().fg(color));
         }
         // Corner at target side.
         let corner2 = if y2 > y1 { "┐" } else { "┘" };
@@ -571,7 +621,7 @@ fn draw_edge(
         // Horizontal from mid to target.
         for x in half2..x2 {
             f.buffer_mut()
-                .set_string(x, y2, "─", Style::default().fg(color));
+                .set_string(x, y2, line_h, Style::default().fg(color));
         }
     }
 
@@ -581,7 +631,7 @@ fn draw_edge(
     let src_channels = channel_label(&route.from_channels);
     let dst_channels = channel_label(&route.to_channels);
     let channel_style = Style::default()
-        .fg(if route.mute {
+        .fg(if route.mute || disabled {
             Color::DarkGray
         } else {
             Color::Cyan
@@ -603,7 +653,11 @@ fn draw_edge(
         label_x,
         y1.min(y2),
         &gain_label,
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(if disabled {
+            Color::DarkGray
+        } else {
+            Color::Yellow
+        }),
     );
 }
 
@@ -626,14 +680,33 @@ fn draw_device_node(
     node: &NodeInfo,
     dev: &crate::validate::ResolvedDeviceRole,
     plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
     meter_bank: &crate::meter::MeterBank,
 ) {
     let w = w.max(20);
 
-    let (icon, border_color) = match node.role {
+    let missing_input = resolved.unavailable_inputs.contains(&node.alias);
+    let missing_output = resolved.unavailable_outputs.contains(&node.alias);
+    let unavailable = missing_input || missing_output;
+
+    let (icon, role_color) = match node.role {
         DeviceRole::Input => ("🎤", Color::Green),
         DeviceRole::Output => ("🔊", Color::Blue),
         DeviceRole::Both => ("🔄", Color::Magenta),
+    };
+    let border_color = if unavailable {
+        Color::DarkGray
+    } else {
+        role_color
+    };
+    let title_style = if unavailable {
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     };
 
     // Content is drawn FIRST and border LAST so the border is never overwritten.
@@ -644,7 +717,7 @@ fn draw_device_node(
     let inner_w = w.saturating_sub(2);
 
     // Line 1: icon + alias + metadata.
-    let meta = device_metadata(node, dev, plan);
+    let meta = device_metadata(node, dev, plan, resolved);
     let title_reserved = icon.chars().count() + meta.chars().count() + 3;
     let max_name = inner_w as usize;
     let max_name = max_name.saturating_sub(title_reserved);
@@ -653,17 +726,11 @@ fn draw_device_node(
         &format!("{} {} {}", icon, name_display, meta),
         inner_w as usize,
     );
-    f.buffer_mut().set_string(
-        inner_x,
-        y + 1,
-        title,
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    );
+    f.buffer_mut()
+        .set_string(inner_x, y + 1, title, title_style);
 
     // Clip indicator.
-    if let Some(meter) = meter_bank.get(&node.alias, 1) {
+    if let (false, Some(meter)) = (unavailable, meter_bank.get(&node.alias, 1)) {
         let snap = meter.snapshot();
         if snap.clipped {
             f.buffer_mut().set_string(
@@ -675,9 +742,25 @@ fn draw_device_node(
         }
     }
 
-    // Remaining inner lines: spectrum bars.
+    // Remaining inner lines: spectrum bars or missing-device message.
     let spectrum_rows = h.saturating_sub(3).max(1);
-    if let Some(meter) = meter_bank.get(&node.alias, 1) {
+    if unavailable {
+        let missing_label = if missing_input && missing_output {
+            "device missing: input + output"
+        } else if missing_input {
+            "device missing: input"
+        } else {
+            "device missing: output"
+        };
+        f.buffer_mut().set_string(
+            inner_x,
+            y + 2,
+            truncate_chars(missing_label, inner_w as usize),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        );
+    } else if let Some(meter) = meter_bank.get(&node.alias, 1) {
         let snap = meter.snapshot();
         draw_spectrum(f, inner_x, y + 2, inner_w, spectrum_rows, &snap.bands);
     }
@@ -704,6 +787,7 @@ fn device_metadata(
     node: &NodeInfo,
     dev: &crate::validate::ResolvedDeviceRole,
     plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
 ) -> String {
     let mut tags = Vec::new();
 
@@ -714,6 +798,13 @@ fn device_metadata(
             "I{} O{}",
             dev.required_input_channels, dev.required_output_channels
         )),
+    }
+
+    if resolved.unavailable_inputs.contains(&node.alias) {
+        tags.push("NO IN".to_string());
+    }
+    if resolved.unavailable_outputs.contains(&node.alias) {
+        tags.push("NO OUT".to_string());
     }
 
     if dev.limiter {
@@ -819,19 +910,51 @@ fn draw_log(f: &mut ratatui::Frame<'_>, area: Rect, log_lines: &[String], scroll
 
     let lines: Vec<Line<'_>> = log_lines[start..end]
         .iter()
-        .map(|s| {
-            if s.contains("failed") || s.contains("error") || s.contains("fatal") {
-                Line::from(Span::styled(s.clone(), Style::default().fg(Color::Red)))
-            } else if s.contains("reload") || s.contains("changed") {
-                Line::from(Span::styled(s.clone(), Style::default().fg(Color::Yellow)))
-            } else {
-                Line::from(s.clone())
-            }
-        })
+        .map(|s| log_line_with_icon(s))
         .collect();
 
     let para = Paragraph::new(lines);
     f.render_widget(para, inner);
+}
+
+fn log_line_with_icon(s: &str) -> Line<'_> {
+    let (icon, style) = log_icon_style(s);
+    Line::from(vec![
+        Span::styled(format!("{icon} "), style.add_modifier(Modifier::BOLD)),
+        Span::styled(s.to_string(), style),
+    ])
+}
+
+fn log_icon_style(s: &str) -> (&'static str, Style) {
+    let lower = s.to_ascii_lowercase();
+
+    if contains_log_level(s, "ERROR")
+        || lower.contains("failed")
+        || lower.contains("error")
+        || lower.contains("fatal")
+    {
+        ("✖", Style::default().fg(Color::Red))
+    } else if contains_log_level(s, "WARN") || lower.contains("warning") {
+        ("⚠", Style::default().fg(Color::Yellow))
+    } else if contains_log_level(s, "INFO")
+        || lower.contains("connected")
+        || lower.contains("succeeded")
+    {
+        ("●", Style::default().fg(Color::Cyan))
+    } else if contains_log_level(s, "DEBUG") {
+        ("◆", Style::default().fg(Color::Magenta))
+    } else if contains_log_level(s, "TRACE") {
+        ("◇", Style::default().fg(Color::DarkGray))
+    } else if lower.contains("reload") || lower.contains("changed") {
+        ("↻", Style::default().fg(Color::Yellow))
+    } else {
+        ("·", Style::default().fg(Color::DarkGray))
+    }
+}
+
+fn contains_log_level(s: &str, level: &str) -> bool {
+    s.split(|c: char| !c.is_ascii_alphabetic())
+        .any(|word| word == level)
 }
 
 // ── Help bar ───────────────────────────────────────────────────────────────
