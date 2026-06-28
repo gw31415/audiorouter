@@ -130,7 +130,7 @@ pub fn default_config_path() -> anyhow::Result<PathBuf> {
 /// Resolve a config path from the optional positional `CONFIG` argument or
 /// the default path.
 ///
-/// Does **not** call `canonicalize()` so that `--print-config-path` works even
+/// Does **not** call `canonicalize()` so that `config-path` works even
 /// when the file does not exist.
 ///
 /// # Errors
@@ -160,7 +160,7 @@ pub fn read_config(path: &Path) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         anyhow::anyhow!(
             "cannot read config file {}: {e}\n\
-             Hint: Run 'audiorouter --print-config-path' to see the expected location.",
+             Hint: Run 'audiorouter config-path' to see the expected location.",
             path.display()
         )
     })?;
@@ -386,6 +386,6 @@ limiter = true
         let result = read_config(Path::new("/nonexistent/audiorouter-test.toml"));
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("--print-config-path"));
+        assert!(msg.contains("config-path"));
     }
 }
