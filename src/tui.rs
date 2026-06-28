@@ -401,8 +401,9 @@ fn draw_status_bar(
     let mins = elapsed.as_secs() / 60;
     let secs = elapsed.as_secs() % 60;
 
-    let title = format!(
-        " 🎛 audiorouter  \u{2502}  \u{1f3b5} {}kHz  \u{2502}  \u{1f39a} buf {}  \u{2502}  \u{23f1} {}m{:02}s  \u{2502}  \u{1f517} {}/{} ",
+    const APP_LABEL: &str = "audiorouter";
+    let stats = format!(
+        "  \u{2502}  \u{1f3b5} {}kHz  \u{2502}  \u{1f39a} buf {}  \u{2502}  \u{23f1} {}m{:02}s  \u{2502}  \u{1f517} {}/{} ",
         plan.config.engine.sample_rate / 1000,
         plan.config.engine.buffer_size,
         mins,
@@ -414,7 +415,13 @@ fn draw_status_bar(
     f.buffer_mut().set_string(
         area.x,
         area.y,
-        title,
+        APP_LABEL,
+        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+    );
+    f.buffer_mut().set_string(
+        area.x + APP_LABEL.len() as u16,
+        area.y,
+        stats,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
