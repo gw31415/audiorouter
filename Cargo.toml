@@ -2,7 +2,12 @@
 name = "audiorouter"
 version = "0.1.0"
 edition = "2024"
+description = "Cross-platform command-line audio router with a terminal UI"
 license = "Apache-2.0"
+repository = "https://github.com/gw31415/audiorouter"
+readme = "README.md"
+keywords = ["audio", "routing", "cpal", "tui", "mixer"]
+categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
 anyhow = ">=1,<2"
