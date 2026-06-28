@@ -63,7 +63,7 @@ impl AudioEngine {
         resolved: crate::devices::ResolvedAudioDevices,
         config_path: &Path,
     ) -> Result<Self, crate::error::AppError> {
-        let meter_bank = Arc::new(MeterBank::for_plan(&plan));
+        let meter_bank = Arc::new(MeterBank::for_plan(&plan, &resolved));
         let running = Arc::new(AtomicBool::new(true));
         let fatal_error = Arc::new(AtomicBool::new(false));
 
@@ -135,7 +135,7 @@ impl AudioEngine {
             ))
         })?;
         let new_resolved = crate::devices::resolve_devices(&new_plan)?;
-        let new_meter_bank = Arc::new(MeterBank::for_plan(&new_plan));
+        let new_meter_bank = Arc::new(MeterBank::for_plan(&new_plan, &new_resolved));
 
         // Swap everything atomically.
         self.teardown_streams();
@@ -258,6 +258,7 @@ impl AudioEngine {
                 producers,
                 &self.fatal_error,
                 alias.to_string(),
+                resolved_dev.preferred_input_channels as usize,
                 self.meter_bank.clone(),
             )
             .map_err(|e| {
@@ -342,6 +343,7 @@ impl AudioEngine {
                 limiter,
                 &self.fatal_error,
                 alias.to_string(),
+                resolved_dev.preferred_output_channels as usize,
                 self.meter_bank.clone(),
             )
             .map_err(|e| {
@@ -515,6 +517,7 @@ fn build_input_stream(
     producers: Vec<HeapProd<f32>>,
     fatal_error: &Arc<AtomicBool>,
     device_alias: String,
+    preferred_channels: usize,
     meter_bank: Arc<MeterBank>,
 ) -> Result<Stream, cpal::Error> {
     let _ = fatal_error;
@@ -534,6 +537,7 @@ fn build_input_stream(
                 update_input_meters(
                     data,
                     config.channels as usize,
+                    preferred_channels,
                     &alias_for_cb,
                     &meter_bank_for_cb,
                 );
@@ -548,6 +552,7 @@ fn build_input_stream(
                 update_input_meters_i(
                     data,
                     config.channels as usize,
+                    preferred_channels,
                     &alias_for_cb,
                     &meter_bank_for_cb,
                 );
@@ -562,6 +567,7 @@ fn build_input_stream(
                 update_input_meters_i(
                     data,
                     config.channels as usize,
+                    preferred_channels,
                     &alias_for_cb,
                     &meter_bank_for_cb,
                 );
@@ -576,6 +582,7 @@ fn build_input_stream(
                 update_input_meters_i(
                     data,
                     config.channels as usize,
+                    preferred_channels,
                     &alias_for_cb,
                     &meter_bank_for_cb,
                 );
@@ -606,11 +613,23 @@ fn input_callback<T: ToF32>(data: &[T], producers: &Arc<Mutex<Vec<HeapProd<f32>>
 }
 
 /// Update per-channel meters from interleaved input data.
-fn update_input_meters(data: &[f32], channels: usize, alias: &str, meter_bank: &MeterBank) {
+///
+/// `preferred_channels` is the OS-reported preferred channel count for the
+/// device.  Channels 1..=preferred_channels are mono down-mixed and fed to
+/// the representative meter (key `alias:0`).
+fn update_input_meters(
+    data: &[f32],
+    channels: usize,
+    preferred_channels: usize,
+    alias: &str,
+    meter_bank: &MeterBank,
+) {
     if channels == 0 {
         return;
     }
     let frames = data.len() / channels;
+
+    // Per-channel meters (routed channels).
     for ch in 1..=channels {
         let Some(meter) = meter_bank.get(alias, ch) else {
             continue;
@@ -618,12 +637,27 @@ fn update_input_meters(data: &[f32], channels: usize, alias: &str, meter_bank: &
         let ch_samples: Vec<f32> = (0..frames).map(|f| data[f * channels + (ch - 1)]).collect();
         meter.update(&ch_samples);
     }
+
+    // Representative meter: mono down-mix of preferred channels.
+    let pref = preferred_channels.min(channels);
+    if pref > 0 {
+        if let Some(meter) = meter_bank.get(alias, 0) {
+            let mono: Vec<f32> = (0..frames)
+                .map(|f| {
+                    let sum: f32 = (0..pref).map(|ch| data[f * channels + ch]).sum();
+                    sum / pref as f32
+                })
+                .collect();
+            meter.update(&mono);
+        }
+    }
 }
 
 /// Update per-channel meters from interleaved integer input data.
 fn update_input_meters_i<T: ToF32>(
     data: &[T],
     channels: usize,
+    preferred_channels: usize,
     alias: &str,
     meter_bank: &MeterBank,
 ) {
@@ -631,7 +665,7 @@ fn update_input_meters_i<T: ToF32>(
         return;
     }
     let f32_data: Vec<f32> = data.iter().map(|s| s.to_f32()).collect();
-    update_input_meters(&f32_data, channels, alias, meter_bank);
+    update_input_meters(&f32_data, channels, preferred_channels, alias, meter_bank);
 }
 
 // ─── Output stream ───────────────────────────────────────────────────────
@@ -647,6 +681,7 @@ fn build_output_stream(
     limiter: bool,
     fatal_error: &Arc<AtomicBool>,
     device_alias: String,
+    preferred_channels: usize,
     meter_bank: Arc<MeterBank>,
 ) -> Result<Stream, cpal::Error> {
     let _ = fatal_error;
@@ -663,7 +698,13 @@ fn build_output_stream(
             config,
             move |data: &mut [f32], _: &OutputCallbackInfo| {
                 output_callback(data, out_channels, &shared, limiter);
-                update_output_meters(data, out_channels, &alias_for_cb, &meter_bank_for_cb);
+                update_output_meters(
+                    data,
+                    out_channels,
+                    preferred_channels,
+                    &alias_for_cb,
+                    &meter_bank_for_cb,
+                );
             },
             err_fn,
             None,
@@ -745,17 +786,43 @@ fn output_callback<T: FromF32>(
 }
 
 /// Update per-channel meters from interleaved output data.
-fn update_output_meters(data: &[f32], channels: usize, alias: &str, meter_bank: &MeterBank) {
+///
+/// `preferred_channels` is the OS-reported preferred channel count for the
+/// device.  Channels 1..=preferred_channels are mono down-mixed and fed to
+/// the representative meter (key `alias:0`).
+fn update_output_meters(
+    data: &[f32],
+    channels: usize,
+    preferred_channels: usize,
+    alias: &str,
+    meter_bank: &MeterBank,
+) {
     if channels == 0 {
         return;
     }
     let frames = data.len() / channels;
+
+    // Per-channel meters (routed channels).
     for ch in 1..=channels {
         let Some(meter) = meter_bank.get(alias, ch) else {
             continue;
         };
         let ch_samples: Vec<f32> = (0..frames).map(|f| data[f * channels + (ch - 1)]).collect();
         meter.update(&ch_samples);
+    }
+
+    // Representative meter: mono down-mix of preferred channels.
+    let pref = preferred_channels.min(channels);
+    if pref > 0 {
+        if let Some(meter) = meter_bank.get(alias, 0) {
+            let mono: Vec<f32> = (0..frames)
+                .map(|f| {
+                    let sum: f32 = (0..pref).map(|ch| data[f * channels + ch]).sum();
+                    sum / pref as f32
+                })
+                .collect();
+            meter.update(&mono);
+        }
     }
 }
 

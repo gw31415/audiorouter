@@ -239,7 +239,17 @@ pub struct MeterBank {
 
 impl MeterBank {
     /// Build a meter bank for every channel referenced in the plan.
-    pub fn for_plan(plan: &crate::validate::ValidatedConfig) -> Self {
+    ///
+    /// Per-channel meters (key `alias:N`, 1-based) are created for every
+    /// channel referenced by a route.  Additionally, a representative meter
+    /// (key `alias:0`) is created for each device, fed by a mono down-mix of
+    /// the device's OS-reported preferred channels.  The TUI visualises this
+    /// representative meter so every device shows activity regardless of
+    /// which channels are routed.
+    pub fn for_plan(
+        plan: &crate::validate::ValidatedConfig,
+        resolved: &crate::devices::ResolvedAudioDevices,
+    ) -> Self {
         use std::collections::BTreeMap;
 
         let mut keys: BTreeMap<String, ()> = BTreeMap::new();
@@ -254,6 +264,12 @@ impl MeterBank {
             for &ch in &route.to_channels {
                 keys.insert(format!("{}:{}", route.to, ch), ());
             }
+        }
+
+        // Representative meter (mono down-mix of preferred channels) for each
+        // resolved device.
+        for alias in resolved.devices.keys() {
+            keys.insert(format!("{}:0", alias), ());
         }
 
         let meters = keys

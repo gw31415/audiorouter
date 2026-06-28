@@ -105,6 +105,11 @@ pub struct ResolvedDevice {
     pub max_input_channels: u16,
     /// Max output channels available.
     pub max_output_channels: u16,
+    /// Preferred (default) input channel count reported by the OS
+    /// (CoreAudio `kAudioDevicePropertyStreamFormat`).
+    pub preferred_input_channels: u16,
+    /// Preferred (default) output channel count reported by the OS.
+    pub preferred_output_channels: u16,
 }
 
 /// A fully resolved set of devices, ready for stream opening.
@@ -287,8 +292,10 @@ pub fn resolve_devices(
 
         let mut cpal_input_device: Option<Device> = None;
         let mut max_in_ch: u16 = 0;
+        let mut pref_in_ch: u16 = 0;
         let mut cpal_output_device: Option<Device> = None;
         let mut max_out_ch: u16 = 0;
+        let mut pref_out_ch: u16 = 0;
 
         let active_input_routes: Vec<_> = plan
             .routes
@@ -338,6 +345,7 @@ pub fn resolve_devices(
                         )));
                     }
                     max_in_ch = max_ch;
+                    pref_in_ch = preferred_channels(d, true);
                     cpal_input_device = Some(d.clone());
                 }
                 None => continue,
@@ -363,6 +371,7 @@ pub fn resolve_devices(
                         )));
                     }
                     max_out_ch = max_ch;
+                    pref_out_ch = preferred_channels(d, false);
                     cpal_output_device = Some(d.clone());
                 }
                 None => continue,
@@ -389,11 +398,13 @@ pub fn resolve_devices(
         if max_in_ch == 0 {
             if let Some(d) = input_devices.iter().find(|d| &d.to_string() == dev_name) {
                 max_in_ch = max_channels(d, true).unwrap_or(0);
+                pref_in_ch = preferred_channels(d, true);
             }
         }
         if max_out_ch == 0 {
             if let Some(d) = output_devices.iter().find(|d| &d.to_string() == dev_name) {
                 max_out_ch = max_channels(d, false).unwrap_or(0);
+                pref_out_ch = preferred_channels(d, false);
             }
         }
 
@@ -411,6 +422,8 @@ pub fn resolve_devices(
                 is_output: needs_output,
                 max_input_channels: max_in_ch,
                 max_output_channels: max_out_ch,
+                preferred_input_channels: pref_in_ch,
+                preferred_output_channels: pref_out_ch,
             },
         );
     }
@@ -466,6 +479,24 @@ fn collect_devices(host: &Host, is_input: bool) -> anyhow::Result<Vec<Device>> {
 fn max_channels(device: &Device, is_input: bool) -> Option<u16> {
     let configs = supported_configs(device, is_input).ok()?;
     configs.iter().map(|c| c.channels()).max()
+}
+
+/// Query the OS-reported preferred (default) channel count for a device.
+///
+/// On macOS this reads the device's default stream format
+/// (`kAudioDevicePropertyStreamFormat`), which reflects the channel layout
+/// the device advertises when an app simply opens it without explicit
+/// channel configuration — the "preferred channels".
+fn preferred_channels(device: &Device, is_input: bool) -> u16 {
+    let result = if is_input {
+        device.default_input_config()
+    } else {
+        device.default_output_config()
+    };
+    match result {
+        Ok(config) => config.channels(),
+        Err(_) => 0,
+    }
 }
 
 fn supports_sample_rate(device: &Device, is_input: bool, rate: u32) -> bool {

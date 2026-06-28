@@ -972,7 +972,7 @@ fn draw_device_node(
         f.buffer_mut()
             .set_string(x + w.saturating_sub(5), y + 1, "🧱", style);
     }
-    if let (false, Some(meter)) = (unavailable, meter_bank.get(&node.alias, 1)) {
+    if let (false, Some(meter)) = (unavailable, meter_bank.get(&node.alias, 0)) {
         let snap = meter.snapshot();
         if snap.clipped {
             f.buffer_mut().set_string(
@@ -1002,7 +1002,7 @@ fn draw_device_node(
                 .fg(Color::White)
                 .add_modifier(Modifier::DIM),
         );
-    } else if let Some(meter) = meter_bank.get(&node.alias, 1) {
+    } else if let Some(meter) = meter_bank.get(&node.alias, 0) {
         let snap = meter.snapshot();
         draw_spectrum(f, inner_x, y + 2, inner_w, spectrum_rows, &snap.bands);
     }
