@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod devices;
 mod error;
+mod graph;
 mod log_buffer;
 mod meter;
 mod mixer;

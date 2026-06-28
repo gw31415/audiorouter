@@ -121,6 +121,14 @@ pub struct ResolvedAudioDevices {
 }
 
 impl ResolvedAudioDevices {
+    /// All device aliases that are currently missing (not connected).
+    /// Combines unavailable inputs and outputs.
+    pub fn missing_device_aliases(&self) -> HashSet<String> {
+        let mut missing = self.unavailable_inputs.clone();
+        missing.extend(self.unavailable_outputs.iter().cloned());
+        missing
+    }
+
     /// Returns true when the route at `index` is active for stream construction.
     pub fn route_enabled(&self, index: usize) -> bool {
         !self.disabled_route_indices.contains(&index)
