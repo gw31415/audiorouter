@@ -91,6 +91,7 @@ pub fn run(
         last_device_poll: Instant::now(),
         show_inactive_devices: false,
         show_missing_devices: true,
+        config_path: config_path.to_path_buf(),
     };
 
     // Result stored here so we can restore the terminal before returning.
@@ -119,6 +120,7 @@ struct LoopState {
     last_device_poll: Instant,
     show_inactive_devices: bool,
     show_missing_devices: bool,
+    config_path: std::path::PathBuf,
 }
 
 const LOG_PANEL_HEIGHT: u16 = 7;
@@ -298,6 +300,7 @@ fn run_loop(
                     scroll,
                     st.show_inactive_devices,
                     st.show_missing_devices,
+                    &st.config_path,
                 )?;
                 std::thread::sleep(Duration::from_secs(2));
                 return Err(crate::error::AppError::runtime("fatal audio stream error"));
@@ -317,6 +320,7 @@ fn run_loop(
             scroll,
             st.show_inactive_devices,
             st.show_missing_devices,
+            &st.config_path,
         )?;
     }
 
@@ -343,6 +347,7 @@ fn draw(
     scroll: u16,
     show_inactive: bool,
     show_missing: bool,
+    config_path: &std::path::Path,
 ) -> Result<(), crate::error::AppError> {
     terminal
         .draw(|f| {
@@ -369,7 +374,15 @@ fn draw(
                 ])
                 .split(area);
 
-            draw_status_bar(f, chunks[0], plan, resolved, start_time, reload_message);
+            draw_status_bar(
+                f,
+                chunks[0],
+                plan,
+                resolved,
+                start_time,
+                reload_message,
+                config_path,
+            );
             draw_routing_graph(
                 f,
                 chunks[1],
@@ -389,6 +402,11 @@ fn draw(
 
 // ── Status bar ─────────────────────────────────────────────────────────────
 
+const APP_VERSION: &str = match option_env!("APP_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 fn draw_status_bar(
     f: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -396,12 +414,13 @@ fn draw_status_bar(
     resolved: &crate::devices::ResolvedAudioDevices,
     start_time: Instant,
     _reload_message: &Option<String>,
+    config_path: &std::path::Path,
 ) {
     let elapsed = start_time.elapsed();
     let mins = elapsed.as_secs() / 60;
     let secs = elapsed.as_secs() % 60;
 
-    const APP_LABEL: &str = "audiorouter";
+    let app_label = format!("audiorouter v{APP_VERSION}");
     let stats = format!(
         "  \u{2502}  \u{1f3b5} {}kHz  \u{2502}  \u{1f39a} buf {}  \u{2502}  \u{23f1} {}m{:02}s  \u{2502}  \u{1f517} {}/{} ",
         plan.config.engine.sample_rate / 1000,
@@ -412,20 +431,45 @@ fn draw_status_bar(
         plan.routes.len(),
     );
 
+    let label_w = app_label.width() as u16;
+    let stats_w = stats.width() as u16;
+
     f.buffer_mut().set_string(
         area.x,
         area.y,
-        APP_LABEL,
+        &app_label,
         Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
     );
     f.buffer_mut().set_string(
-        area.x + APP_LABEL.len() as u16,
+        area.x + label_w,
         area.y,
-        stats,
+        &stats,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     );
+
+    // Config path: right-aligned, home directory abbreviated to ~.
+    let path_str = abbreviate_home(config_path);
+    let path_w = path_str.width() as u16;
+    let used = label_w + stats_w;
+    if area.width > used + path_w {
+        f.buffer_mut().set_string(
+            area.x + area.width - path_w,
+            area.y,
+            &path_str,
+            Style::default().fg(Color::DarkGray),
+        );
+    }
+}
+
+fn abbreviate_home(path: &std::path::Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(rel) = path.strip_prefix(&home) {
+            return format!("~/{}", rel.display());
+        }
+    }
+    path.display().to_string()
 }
 
 // ── Compact fallback for tiny terminals ─────────────────────────────────────

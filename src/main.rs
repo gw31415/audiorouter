@@ -17,15 +17,21 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 
 use crate::cli::{Cli, Command};
 use crate::config::{read_config, resolve_config_path};
 use crate::error::{AppError, exit_code_for};
 use crate::validate::validate_config;
 
+const APP_VERSION: &str = match option_env!("APP_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = Cli::command().version(APP_VERSION).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let command = cli.command_or_default();
     let interactive = is_interactive_run(command);
 
