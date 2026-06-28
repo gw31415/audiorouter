@@ -685,7 +685,7 @@ fn draw_routing_graph(
     for node in &nodes {
         let dev = plan.device_by_name(&node.alias).unwrap();
         draw_device_node(
-            f, node.x, node.y, node_w, node_h, node, dev, resolved, meter_bank,
+            f, node.x, node.y, node_w, node_h, node, dev, plan, resolved, meter_bank,
         );
     }
 
@@ -927,6 +927,7 @@ fn draw_device_node(
     h: u16,
     node: &NodeInfo,
     dev: &crate::validate::ResolvedDeviceRole,
+    plan: &ValidatedConfig,
     resolved: &crate::devices::ResolvedAudioDevices,
     meter_bank: &crate::meter::MeterBank,
 ) {
@@ -1030,8 +1031,24 @@ fn draw_device_node(
     // Format: "▲routed/total" so both utilisation and capacity are visible at a glance.
     {
         let phys = resolved.devices.get(&node.alias);
-        let ch_in = dev.required_input_channels;
-        let ch_out = dev.required_output_channels;
+        // Count unique channels actually routed to/from this device across
+        // all active (non-disabled) routes — not the max channel index.
+        let active_input_channels: std::collections::HashSet<usize> = plan
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| resolved.route_enabled(*i) && r.from == node.alias)
+            .flat_map(|(_, r)| r.from_channels.iter().copied())
+            .collect();
+        let active_output_channels: std::collections::HashSet<usize> = plan
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| resolved.route_enabled(*i) && r.to == node.alias)
+            .flat_map(|(_, r)| r.to_channels.iter().copied())
+            .collect();
+        let ch_in = active_input_channels.len();
+        let ch_out = active_output_channels.len();
         let total_in = phys.map(|d| d.max_input_channels as usize).unwrap_or(0);
         let total_out = phys.map(|d| d.max_output_channels as usize).unwrap_or(0);
 

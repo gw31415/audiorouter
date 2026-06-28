@@ -245,21 +245,13 @@ impl MeterBank {
         let mut keys: BTreeMap<String, ()> = BTreeMap::new();
 
         for route in &plan.routes {
-            // Source device channels
-            let from_dev = plan.device_by_name(&route.from);
-            let from_ch_count = from_dev
-                .map(|d| d.required_input_channels.max(1))
-                .unwrap_or(1);
-            for ch in 1..=from_ch_count {
+            // Source device channels — only the channels actually routed.
+            for &ch in &route.from_channels {
                 keys.insert(format!("{}:{}", route.from, ch), ());
             }
 
-            // Destination device channels
-            let to_dev = plan.device_by_name(&route.to);
-            let to_ch_count = to_dev
-                .map(|d| d.required_output_channels.max(1))
-                .unwrap_or(1);
-            for ch in 1..=to_ch_count {
+            // Destination device channels — only the channels actually routed.
+            for &ch in &route.to_channels {
                 keys.insert(format!("{}:{}", route.to, ch), ());
             }
         }
