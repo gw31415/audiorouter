@@ -40,12 +40,28 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::audio::{AudioEngine, ConfigWatcher, EngineState};
 use crate::validate::ValidatedConfig;
 
 const TICK_RATE: Duration = Duration::from_millis(50); // 20 fps UI refresh
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
 const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+// ── Semantic color palette for routing graph ──────────────────────────────
+/// Node border (available device).
+const COLOR_BORDER: Color = Color::Cyan;
+/// Signal source: capture channels (▲) and from-side channel labels.
+const COLOR_IN: Color = Color::Green;
+/// Signal destination: playback channels (▼) and to-side channel labels.
+const COLOR_OUT: Color = Color::Magenta;
+/// Route path line and arrowhead.
+const COLOR_ROUTE: Color = Color::LightBlue;
+/// Gain value and limiter indicator.
+const COLOR_GAIN: Color = Color::Yellow;
+/// Clip / overload indicator.
+const COLOR_CLIP: Color = Color::Red;
 
 /// Run the TUI event loop over an audio engine until the user quits.
 ///
@@ -526,14 +542,14 @@ fn draw_routing_graph(
     // routes to the full panel width, compute the minimum comfortable route gap
     // from the labels drawn on the path, then center the whole graph.
     const NODE_W: u16 = 24;
-    const NODE_H: u16 = 5;
+    const NODE_H: u16 = 6;
     const ROW_GAP: u16 = 1;
     const MIN_PANEL_PAD: u16 = 2;
     const MIN_ROUTE_GAP: u16 = 10;
     const MAX_ROUTE_GAP: u16 = 24;
 
     let node_w = NODE_W.min(graph_area.width.saturating_sub(2)).max(12);
-    let node_h = NODE_H.min(graph_area.height.saturating_sub(1)).max(4);
+    let node_h = NODE_H.min(graph_area.height.saturating_sub(1)).max(5);
     let layer_count = max_layer as u16 + 1;
     let row_count = max_row as u16 + 1;
 
@@ -543,14 +559,16 @@ fn draw_routing_graph(
         .enumerate()
         .filter(|(_, r)| !exclude.contains(&r.from) && !exclude.contains(&r.to))
         .map(|(i, r)| {
-            let src = channel_label(&r.from_channels).len() as u16;
-            let dst = channel_label(&r.to_channels).len() as u16;
+            let src = channel_label(&r.from_channels).width() as u16;
+            let dst = channel_label(&r.to_channels).width() as u16;
             let gain = if !resolved.route_enabled(i) {
-                3
+                3 // "OFF"
             } else if r.mute {
-                1
+                1 // "X"
+            } else if r.gain_db == 0.0 {
+                6 // "──────"
             } else {
-                format!("{:+.1}dB", r.gain_db).len() as u16
+                format!("{:+.1}dB", r.gain_db).width() as u16
             };
             src + dst + gain + 6
         })
@@ -580,10 +598,8 @@ fn draw_routing_graph(
     let mut nodes: Vec<NodeInfo> = Vec::new();
 
     for placed in &layout {
-        let role = role_for_device(plan, &placed.alias);
         nodes.push(NodeInfo {
             alias: placed.alias.clone(),
-            role,
             x: col_x(placed.layer),
             y: graph_top + placed.row as u16 * row_spacing,
         });
@@ -618,24 +634,13 @@ fn draw_routing_graph(
     for node in &nodes {
         let dev = plan.device_by_name(&node.alias).unwrap();
         draw_device_node(
-            f, node.x, node.y, node_w, node_h, node, dev, plan, resolved, meter_bank,
+            f, node.x, node.y, node_w, node_h, node, dev, resolved, meter_bank,
         );
     }
 
     // ── Draw inactive (non-routing) devices at the bottom ─────────
     if show_inactive && !inactive.is_empty() {
         draw_inactive_devices(f, inner, graph_area, &inactive, plan);
-    }
-}
-
-/// Derive a device's display role from its route connectivity, not from
-/// a fixed column position.
-fn role_for_device(plan: &ValidatedConfig, alias: &str) -> DeviceRole {
-    match plan.device_by_name(alias) {
-        Some(dev) if dev.needs_input && dev.needs_output => DeviceRole::Both,
-        Some(dev) if dev.needs_input => DeviceRole::Input,
-        Some(dev) if dev.needs_output => DeviceRole::Output,
-        _ => DeviceRole::Both, // isolated or unknown — treat as neutral
     }
 }
 
@@ -674,15 +679,9 @@ fn draw_inactive_devices(
         }
 
         let dev = plan.device_by_name(alias);
-        let icon = match dev {
-            Some(d) if d.needs_input && d.needs_output => "🔄",
-            Some(d) if d.needs_input => "🎤",
-            Some(d) if d.needs_output => "🔊",
-            _ => "⚪",
-        };
         let detail = match dev {
-            Some(d) => format!("{} {} ({})", icon, alias, d.device,),
-            None => format!("⚪ {}", alias),
+            Some(d) => format!("⊙ {} ({})", alias, d.device),
+            None => format!("⊙ {}", alias),
         };
 
         let x = inner.x + (col as u16) * 24;
@@ -694,16 +693,8 @@ fn draw_inactive_devices(
 #[derive(Clone)]
 struct NodeInfo {
     alias: String,
-    role: DeviceRole,
     x: u16,
     y: u16,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum DeviceRole {
-    Input,
-    Output,
-    Both,
 }
 
 /// Draw a smoothstep-style edge between two nodes using Unicode box-drawing chars.
@@ -718,10 +709,11 @@ fn draw_edge(
     disabled: bool,
     mid_x: u16,
 ) {
-    let color = if disabled || route.mute {
-        Color::DarkGray
+    let dim_route = disabled || route.mute;
+    let route_style = if dim_route {
+        Style::default().fg(COLOR_ROUTE).add_modifier(Modifier::DIM)
     } else {
-        Color::LightBlue
+        Style::default().fg(COLOR_ROUTE)
     };
     let line_h = if disabled { "┄" } else { "─" };
     let line_v = if disabled { "┆" } else { "│" };
@@ -730,6 +722,8 @@ fn draw_edge(
         "OFF".to_string()
     } else if route.mute {
         "X".to_string()
+    } else if route.gain_db == 0.0 {
+        "──────".to_string()
     } else {
         format!("{:+.1}dB", route.gain_db)
     };
@@ -739,8 +733,7 @@ fn draw_edge(
     if y1 == y2 {
         // Same row — straight line.
         for x in x1..x2 {
-            f.buffer_mut()
-                .set_string(x, y1, line_h, Style::default().fg(color));
+            f.buffer_mut().set_string(x, y1, line_h, route_style);
         }
     } else {
         // Step path: right from source → corner → vertical → corner → right to target.
@@ -749,29 +742,24 @@ fn draw_edge(
 
         // Horizontal from source to mid.
         for x in x1..half1 {
-            f.buffer_mut()
-                .set_string(x, y1, line_h, Style::default().fg(color));
+            f.buffer_mut().set_string(x, y1, line_h, route_style);
         }
         // Corner at source side.
         let corner1 = if y2 > y1 { "┌" } else { "└" };
-        f.buffer_mut()
-            .set_string(half1, y1, corner1, Style::default().fg(color));
+        f.buffer_mut().set_string(half1, y1, corner1, route_style);
 
         // Vertical segment.
         let (vy_start, vy_end) = if y2 > y1 { (y1 + 1, y2) } else { (y2 + 1, y1) };
         for y in vy_start..vy_end {
-            f.buffer_mut()
-                .set_string(half1, y, line_v, Style::default().fg(color));
+            f.buffer_mut().set_string(half1, y, line_v, route_style);
         }
         // Corner at target side.
         let corner2 = if y2 > y1 { "┐" } else { "┘" };
-        f.buffer_mut()
-            .set_string(half1, y2, corner2, Style::default().fg(color));
+        f.buffer_mut().set_string(half1, y2, corner2, route_style);
 
         // Horizontal from mid to target.
         for x in half2..x2 {
-            f.buffer_mut()
-                .set_string(x, y2, line_h, Style::default().fg(color));
+            f.buffer_mut().set_string(x, y2, line_h, route_style);
         }
     }
 
@@ -779,7 +767,7 @@ fn draw_edge(
     if x2 > x1 {
         let arrow = if disabled { "▷" } else { "▶" };
         f.buffer_mut()
-            .set_string(x2.saturating_sub(1), y2, arrow, Style::default().fg(color));
+            .set_string(x2.saturating_sub(1), y2, arrow, route_style);
     }
 
     // Place channel and gain labels along the edge with explicit ─ gaps.
@@ -791,24 +779,32 @@ fn draw_edge(
     // gain on the lower row alongside whichever channel label shares it.
     let src_channels = channel_label(&route.from_channels);
     let dst_channels = channel_label(&route.to_channels);
-    let channel_style = Style::default()
-        .fg(if route.mute || disabled {
-            Color::DarkGray
-        } else {
-            Color::Cyan
-        })
-        .add_modifier(Modifier::BOLD);
-    let gain_style = Style::default().fg(if disabled {
-        Color::DarkGray
+    let inactive = route.mute || disabled;
+    let src_ch_style = if inactive {
+        Style::default().fg(COLOR_IN).add_modifier(Modifier::DIM)
     } else {
-        Color::Yellow
-    });
-    // Leading space breaks the line before the value; the trailing ─ is
-    // drawn as part of the sequential gap, not appended to the label.
-    let gain_text = format!(" {}", gain_label);
-    let gain_w = gain_text.len() as u16;
-    let src_w = src_channels.len() as u16;
-    let dst_w = dst_channels.len() as u16;
+        Style::default().fg(COLOR_IN).add_modifier(Modifier::BOLD)
+    };
+    let dst_ch_style = if inactive {
+        Style::default().fg(COLOR_OUT).add_modifier(Modifier::DIM)
+    } else {
+        Style::default().fg(COLOR_OUT).add_modifier(Modifier::BOLD)
+    };
+    let gain_style = if dim_route || route.gain_db == 0.0 {
+        route_style // blend: dim when inactive, or 0dB dashes flow into line
+    } else {
+        Style::default().fg(COLOR_GAIN)
+    };
+    // Leading space breaks the line visually before a numeric value.
+    // Omit it when the label itself is dashes — they should flow into the line.
+    let gain_text = if route.gain_db == 0.0 && !disabled && !route.mute {
+        gain_label.clone()
+    } else {
+        format!(" {}", gain_label)
+    };
+    let gain_w = gain_text.width() as u16;
+    let src_w = src_channels.width() as u16;
+    let dst_w = dst_channels.width() as u16;
 
     if y1 == y2 {
         // Same row: place labels sequentially with 1-cell ─ gaps.
@@ -820,23 +816,29 @@ fn draw_edge(
         let arrow_x = x2.saturating_sub(1);
 
         // Always draw src (it's closest to the source node).
-        f.buffer_mut().set_string(src_x, row, &src_channels, channel_style);
+        f.buffer_mut()
+            .set_string(src_x, row, &src_channels, src_ch_style);
 
         // Draw gain + dst only if they fit before the arrow with a ─ gap.
         if dst_x.saturating_add(dst_w) < arrow_x {
-            f.buffer_mut().set_string(gain_x, row, &gain_text, gain_style);
-            f.buffer_mut().set_string(dst_x, row, &dst_channels, channel_style);
+            f.buffer_mut()
+                .set_string(gain_x, row, &gain_text, gain_style);
+            f.buffer_mut()
+                .set_string(dst_x, row, &dst_channels, dst_ch_style);
         } else if gain_x.saturating_add(gain_w) < arrow_x {
             // Not enough room for dst — draw gain only.
-            f.buffer_mut().set_string(gain_x, row, &gain_text, gain_style);
+            f.buffer_mut()
+                .set_string(gain_x, row, &gain_text, gain_style);
         }
     } else {
         // Cross-row: src on source horizontal segment, dst on target segment.
         let src_x = x1.saturating_add(1);
-        f.buffer_mut().set_string(src_x, y1, &src_channels, channel_style);
+        f.buffer_mut()
+            .set_string(src_x, y1, &src_channels, src_ch_style);
 
         let dst_x = x2.saturating_sub(dst_w + 2);
-        f.buffer_mut().set_string(dst_x, y2, &dst_channels, channel_style);
+        f.buffer_mut()
+            .set_string(dst_x, y2, &dst_channels, dst_ch_style);
 
         // Gain shares the lower row with one of the channel labels.
         let gain_row = y1.min(y2);
@@ -850,7 +852,8 @@ fn draw_edge(
             (gx, gx > mid_x.saturating_add(1))
         };
         if gain_ok {
-            f.buffer_mut().set_string(gain_x, gain_row, &gain_text, gain_style);
+            f.buffer_mut()
+                .set_string(gain_x, gain_row, &gain_text, gain_style);
         }
     }
 }
@@ -873,7 +876,6 @@ fn draw_device_node(
     h: u16,
     node: &NodeInfo,
     dev: &crate::validate::ResolvedDeviceRole,
-    plan: &ValidatedConfig,
     resolved: &crate::devices::ResolvedAudioDevices,
     meter_bank: &crate::meter::MeterBank,
 ) {
@@ -883,19 +885,9 @@ fn draw_device_node(
     let missing_output = resolved.unavailable_outputs.contains(&node.alias);
     let unavailable = missing_input || missing_output;
 
-    let (icon, role_color) = match node.role {
-        DeviceRole::Input => ("🎤", Color::Green),
-        DeviceRole::Output => ("🔊", Color::Blue),
-        DeviceRole::Both => ("🔄", Color::Magenta),
-    };
-    let border_color = if unavailable {
-        Color::DarkGray
-    } else {
-        role_color
-    };
     let title_style = if unavailable {
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(Color::White)
             .add_modifier(Modifier::DIM)
     } else {
         Style::default()
@@ -904,26 +896,30 @@ fn draw_device_node(
     };
 
     // Content is drawn FIRST and border LAST so the border is never overwritten.
-    let h = h.max(4);
+    let h = h.max(5);
 
     // ── Content (drawn into inner area) ───────────────────────────────
     let inner_x = x + 1;
     let inner_w = w.saturating_sub(2);
 
-    // Line 1: icon + alias + metadata.
-    let meta = device_metadata(node, dev, plan, resolved);
-    let title_reserved = icon.chars().count() + meta.chars().count() + 3;
-    let max_name = inner_w as usize;
-    let max_name = max_name.saturating_sub(title_reserved);
-    let name_display = truncate_chars(&node.alias, max_name);
-    let title = truncate_chars(
-        &format!("{} {} {}", icon, name_display, meta),
-        inner_w as usize,
-    );
+    // Line 1: icon + alias.
+    let max_name = (inner_w as usize).saturating_sub(2);
+    let name_display = truncate_display(&node.alias, max_name);
+    let title = truncate_display(&format!("⊙ {}", name_display), inner_w as usize);
     f.buffer_mut()
         .set_string(inner_x, y + 1, title, title_style);
 
-    // Clip indicator.
+    // Right-aligned indicators on the title line (drawn last to overwrite title text).
+    // 🧱 (limiter active) at second-from-right slot, ⚡ (clip) at rightmost slot.
+    if dev.limiter {
+        let style = if unavailable {
+            Style::default().fg(COLOR_GAIN).add_modifier(Modifier::DIM)
+        } else {
+            Style::default().fg(COLOR_GAIN)
+        };
+        f.buffer_mut()
+            .set_string(x + w.saturating_sub(5), y + 1, "🧱", style);
+    }
     if let (false, Some(meter)) = (unavailable, meter_bank.get(&node.alias, 1)) {
         let snap = meter.snapshot();
         if snap.clipped {
@@ -931,12 +927,12 @@ fn draw_device_node(
                 x + w.saturating_sub(3),
                 y + 1,
                 "⚡",
-                Style::default().fg(Color::Red),
+                Style::default().fg(COLOR_CLIP),
             );
         }
     }
 
-    // Remaining inner lines: spectrum bars or missing-device message.
+    // Inner lines: spectrum bars or missing-device message.
     let spectrum_rows = h.saturating_sub(3).max(1);
     if unavailable {
         let missing_label = if missing_input && missing_output {
@@ -949,9 +945,9 @@ fn draw_device_node(
         f.buffer_mut().set_string(
             inner_x,
             y + 2,
-            truncate_chars(missing_label, inner_w as usize),
+            truncate_display(missing_label, inner_w as usize),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(Color::White)
                 .add_modifier(Modifier::DIM),
         );
     } else if let Some(meter) = meter_bank.get(&node.alias, 1) {
@@ -960,7 +956,13 @@ fn draw_device_node(
     }
 
     // ── Border (drawn LAST so it's always intact) ─────────────────────
-    let border_style = Style::default().fg(border_color);
+    let border_style = if unavailable {
+        Style::default()
+            .fg(COLOR_BORDER)
+            .add_modifier(Modifier::DIM)
+    } else {
+        Style::default().fg(COLOR_BORDER)
+    };
     let top_bottom = "─".repeat(inner_w as usize);
     f.buffer_mut()
         .set_string(x, y, format!("╭{}╮", top_bottom), border_style);
@@ -971,60 +973,57 @@ fn draw_device_node(
         f.buffer_mut()
             .set_string(x + w - 1, y + ry, "│", border_style);
     }
-}
 
-/// Compact metadata shown in each node title.
-///
-/// Device-level limiter is shown as `LIM`. Route-level mute is summarised as
-/// `M0` or `M<n>/<total>` for all routes touching this device.
-fn device_metadata(
-    node: &NodeInfo,
-    dev: &crate::validate::ResolvedDeviceRole,
-    plan: &ValidatedConfig,
-    resolved: &crate::devices::ResolvedAudioDevices,
-) -> String {
-    let mut tags = Vec::new();
+    // ── Channel info overlaid on top border ───────────────────────────
+    // ▲ = audio leaving the device (capture/up), ▼ = audio entering the device (playback/down).
+    // Format: "▲routed/total" so both utilisation and capacity are visible at a glance.
+    {
+        let phys = resolved.devices.get(&node.alias);
+        let ch_in = dev.required_input_channels;
+        let ch_out = dev.required_output_channels;
+        let total_in = phys.map(|d| d.max_input_channels as usize).unwrap_or(0);
+        let total_out = phys.map(|d| d.max_output_channels as usize).unwrap_or(0);
 
-    match node.role {
-        DeviceRole::Input => tags.push(format!("I{}", dev.required_input_channels)),
-        DeviceRole::Output => tags.push(format!("O{}", dev.required_output_channels)),
-        DeviceRole::Both => tags.push(format!(
-            "I{} O{}",
-            dev.required_input_channels, dev.required_output_channels
-        )),
-    }
-
-    if resolved.unavailable_inputs.contains(&node.alias) {
-        tags.push("NO IN".to_string());
-    }
-    if resolved.unavailable_outputs.contains(&node.alias) {
-        tags.push("NO OUT".to_string());
-    }
-
-    if dev.limiter {
-        tags.push("LIM".to_string());
-    }
-
-    let mut route_count = 0usize;
-    let mut muted_count = 0usize;
-    for route in &plan.routes {
-        if route.from == node.alias || route.to == node.alias {
-            route_count += 1;
-            if route.mute {
-                muted_count += 1;
-            }
-        }
-    }
-
-    if route_count > 0 {
-        if muted_count == 0 {
-            tags.push("M0".to_string());
+        // total=0: omit entirely. used=0 but total>0: show dimmed. used>0: show colored.
+        let up_str = if total_in > 0 {
+            format!("▲{}/{}", ch_in, total_in)
+        } else if ch_in > 0 {
+            format!("▲{}", ch_in)
         } else {
-            tags.push(format!("M{muted_count}/{route_count}"));
+            String::new()
+        };
+        let down_str = if total_out > 0 {
+            format!("▼{}/{}", ch_out, total_out)
+        } else if ch_out > 0 {
+            format!("▼{}", ch_out)
+        } else {
+            String::new()
+        };
+
+        let up_style = if unavailable || ch_in == 0 {
+            Style::default().fg(COLOR_IN).add_modifier(Modifier::DIM)
+        } else {
+            Style::default().fg(COLOR_IN).add_modifier(Modifier::BOLD)
+        };
+        let down_style = if unavailable || ch_out == 0 {
+            Style::default().fg(COLOR_OUT).add_modifier(Modifier::DIM)
+        } else {
+            Style::default().fg(COLOR_OUT).add_modifier(Modifier::BOLD)
+        };
+
+        let mut pos = x + 1;
+        if !up_str.is_empty() {
+            f.buffer_mut().set_string(pos, y, &up_str, up_style);
+            pos += up_str.width() as u16;
+        }
+        if !up_str.is_empty() && !down_str.is_empty() {
+            f.buffer_mut().set_string(pos, y, " ", border_style);
+            pos += 1;
+        }
+        if !down_str.is_empty() {
+            f.buffer_mut().set_string(pos, y, &down_str, down_style);
         }
     }
-
-    format!("[{}]", tags.join(" "))
 }
 
 /// Draw a compact EQ-style spectrum using Unicode Braille cells.
@@ -1192,10 +1191,28 @@ fn draw_help(f: &mut ratatui::Frame<'_>, area: Rect) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/// Truncate a string to at most `max_chars` Unicode characters (not bytes).
-/// This is UTF-8 safe — never panics on multi-byte characters like `▁▂▃▄▅▆▇█`.
-fn truncate_chars(s: &str, max_chars: usize) -> String {
-    s.chars().take(max_chars).collect()
+fn truncate_display(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    const ELLIPSIS: &str = "…"; // 1 display column
+    let full_width: usize = s
+        .chars()
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum();
+    if full_width <= max_width {
+        return s.to_string();
+    }
+    let mut col = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if col + w + 1 > max_width {
+            break;
+        }
+        out.push(ch);
+        col += w;
+    }
+    out.push_str(ELLIPSIS);
+    out
 }
 
 /// Timestamp since start, in MM:SS format.
