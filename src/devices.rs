@@ -1,6 +1,6 @@
 //! CPAL device enumeration and resolution.
 //!
-//! This module bridges the validated config plan to actual CoreAudio devices.
+//! This module bridges the validated config plan to CPAL audio devices.
 
 use std::collections::{HashMap, HashSet};
 
@@ -326,7 +326,7 @@ pub fn resolve_devices(
                     let max_ch = max_channels(d, true).unwrap_or(0);
                     if max_ch < required_input_channels as u16 {
                         return Err(crate::error::AppError::config(format!(
-                            "device alias \"{}\" uses CoreAudio device \"{}\" as input requiring {} channel(s), \
+                            "device alias \"{}\" uses audio device \"{}\" as input requiring {} channel(s), \
                              but only {} input channel(s) are available",
                             role.name, dev_name, required_input_channels, max_ch
                         )));

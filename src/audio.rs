@@ -92,7 +92,7 @@ impl AudioEngine {
         &self.plan
     }
 
-    /// Current CoreAudio device resolution, including runtime-disabled routes.
+    /// Current device resolution, including runtime-disabled routes.
     pub fn resolved(&self) -> &crate::devices::ResolvedAudioDevices {
         &self.resolved
     }
@@ -148,7 +148,7 @@ impl AudioEngine {
         Ok(())
     }
 
-    /// Re-scan CoreAudio devices while running and rebuild streams if device
+    /// Re-scan audio devices while running and rebuild streams if device
     /// connectivity changed. Returns connection/disconnection log messages.
     ///
     /// Unlike startup, this does not surface missing-device warnings. A device

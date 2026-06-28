@@ -90,24 +90,41 @@ pub struct RouteConfig {
     pub mute: bool,
 }
 
-/// Resolve the default config path from XDG or home directory.
+/// Resolve the default config path.
 ///
-/// Returns `$XDG_CONFIG_HOME/audiorouter/config.toml` if `XDG_CONFIG_HOME` is
-/// set and non-empty, otherwise `~/.config/audiorouter/config.toml`.
+/// Resolution order:
+/// 1. `$XDG_CONFIG_HOME/audiorouter/config.toml` — if `XDG_CONFIG_HOME` is set and non-empty
+/// 2. `~/.config/audiorouter/config.toml` — if the file already exists there (XDG fallback,
+///    honoured on all platforms so dotfile-managed configs work on macOS/Windows too)
+/// 3. Platform-native config directory:
+///    - Linux/BSD: `~/.config/audiorouter/config.toml`
+///    - macOS:     `~/Library/Application Support/audiorouter/config.toml`
+///    - Windows:   `%APPDATA%\audiorouter\config.toml`
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined.
+/// Returns an error if the home/config directory cannot be determined.
 pub fn default_config_path() -> anyhow::Result<PathBuf> {
+    // 1. Explicit XDG override.
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
         && !xdg.is_empty()
     {
         return Ok(PathBuf::from(xdg).join("audiorouter").join("config.toml"));
     }
 
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
-    Ok(home.join(".config").join("audiorouter").join("config.toml"))
+    // 2. XDG fallback: ~/.config — honoured on all platforms so users who manage
+    //    dotfiles with stow/chezmoi/etc. on macOS or Windows don't need to move files.
+    if let Some(home) = dirs::home_dir() {
+        let xdg_fallback = home.join(".config").join("audiorouter").join("config.toml");
+        if xdg_fallback.exists() {
+            return Ok(xdg_fallback);
+        }
+    }
+
+    // 3. Platform-native directory.
+    let config_dir =
+        dirs::config_dir().ok_or_else(|| anyhow::anyhow!("cannot determine config directory"))?;
+    Ok(config_dir.join("audiorouter").join("config.toml"))
 }
 
 /// Resolve a config path from the optional positional `CONFIG` argument or
@@ -336,6 +353,7 @@ limiter = true
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn empty_xdg_falls_back_to_home() {
         unsafe {

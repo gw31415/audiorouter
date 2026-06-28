@@ -72,7 +72,7 @@ pub fn validate_config(mut config: Config) -> Result<ValidatedConfig, Vec<String
         }
         if dev.device.is_empty() {
             errors.push(format!(
-                "device \"{}\" has an empty 'device' field (CoreAudio device name)",
+                "device \"{}\" has an empty 'device' field (audio device name)",
                 dev.name
             ));
         }

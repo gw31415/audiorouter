@@ -4,11 +4,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// `audiorouter` — a macOS-first command-line audio router.
+/// `audiorouter` — a cross-platform command-line audio router.
 ///
-/// Reads a TOML configuration file, opens named CoreAudio devices,
+/// Reads a TOML configuration file, opens named audio devices,
 /// remaps/mixes audio channels in real time, and writes the mixed result
-/// into output devices such as BlackHole.
+/// into virtual or physical output devices.
 ///
 /// When no subcommand is given, `run` is assumed.
 #[derive(Debug, Parser)]
