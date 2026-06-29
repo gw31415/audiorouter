@@ -1,6 +1,6 @@
 [package]
 name = "audiorouter"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Cross-platform command-line audio router with a terminal UI"
 license = "Apache-2.0"
