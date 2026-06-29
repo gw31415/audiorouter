@@ -1,4 +1,4 @@
-import type { ValidationError, ValidationWarning } from "../lib/validate";
+import type { ValidationError, ValidationWarning } from "../lib/api";
 
 interface Props {
   errors: ValidationError[];

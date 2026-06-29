@@ -22,10 +22,8 @@ import { SidePanel } from "./components/SidePanel";
 import type { Selection } from "./components/SidePanel";
 import { TomlPreview } from "./components/TomlPreview";
 import { ValidationPanel } from "./components/ValidationPanel";
-import { api, type AudioDevice } from "./lib/api";
+import { api, type AudioDevice, type ConfigStatusResponse } from "./lib/api";
 import { cascadeHidden, disconnectedDeviceNames } from "./lib/graph";
-import { stringifyConfig } from "./lib/toml";
-import { validateConfig, warnConfig } from "./lib/validate";
 import type { AudiorouterConfig, DeviceConfig, RouteConfig } from "./types";
 import { createEmptyConfig } from "./types";
 
@@ -36,6 +34,17 @@ function configFingerprint(config: AudiorouterConfig): string {
   return JSON.stringify(config);
 }
 
+function emptyConfigStatus(): ConfigStatusResponse {
+  return {
+    errors: [],
+    warnings: [],
+    unavailableInputs: [],
+    unavailableOutputs: [],
+    disabledRouteIndices: [],
+    missingDeviceAliases: [],
+  };
+}
+
 export default function App() {
   const [config, setConfig] = useState<AudiorouterConfig>(createEmptyConfig());
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -43,8 +52,9 @@ export default function App() {
   const [configPath, setConfigPath] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [savedConfigFingerprint, setSavedConfigFingerprint] = useState<string | null>(null);
-  const [serverErrors, setServerErrors] = useState<ReturnType<typeof validateConfig>>([]);
+  const [configStatus, setConfigStatus] = useState<ConfigStatusResponse>(() => emptyConfigStatus());
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTab | null>(null);
+  const [tomlPreview, setTomlPreview] = useState("");
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const [isInteractive, setIsInteractive] = useState(true);
 
@@ -100,9 +110,26 @@ export default function App() {
   const isDirty =
     savedConfigFingerprint !== null && currentConfigFingerprint !== savedConfigFingerprint;
 
-  const clientErrors = validateConfig(currentConfig);
-  const clientWarnings = warnConfig(currentConfig);
-  const allErrors = [...clientErrors, ...serverErrors];
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([api.previewConfig(currentConfig), api.statusConfig(currentConfig)])
+      .then(([preview, status]) => {
+        if (cancelled) return;
+        setTomlPreview(preview.raw);
+        setConfigStatus(status);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTomlPreview("# TOML preview unavailable");
+        setConfigStatus(emptyConfigStatus());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentConfig]);
+
+  const allErrors = configStatus.errors;
+  const clientWarnings = configStatus.warnings;
 
   // ── Compute device visibility (mirrors tui.rs) ──────────
   // Use effective names throughout (name="" → device)
@@ -112,65 +139,30 @@ export default function App() {
     to: r.to,
   }));
 
-  // Resolve hardware availability per role, mirroring devices.rs:
-  // - route.from requires an available input device
-  // - route.to requires an available output device
-  // A device may therefore be missing only for input, only for output, or both.
+  // Device inventory is still kept client-side for autocomplete and channel badges.
   const availableByName = useMemo(
     () => new Map(availableDevices.map((d) => [d.name, d])),
     [availableDevices],
   );
-  const deviceByAlias = useMemo(
-    () => new Map(currentConfig.devices.map((d) => [d.name || d.device, d])),
-    [currentConfig.devices],
+
+  // Availability and disabled-route semantics come from audiorouter-core via
+  // /api/config/status. Keep React-specific visibility/cascade logic local.
+  const unavailableInputs = useMemo(
+    () => new Set(configStatus.unavailableInputs),
+    [configStatus.unavailableInputs],
   );
-
-  const { unavailableInputs, unavailableOutputs } = useMemo(() => {
-    const inputs = new Set<string>();
-    const outputs = new Set<string>();
-
-    // Best-effort: if the browser cannot fetch device inventory, avoid dimming
-    // every route as missing.
-    if (availableDevices.length === 0) {
-      return { unavailableInputs: inputs, unavailableOutputs: outputs };
-    }
-
-    for (const route of currentConfig.routes) {
-      const fromDev = deviceByAlias.get(route.from);
-      const fromHardwareName = fromDev?.device ?? route.from;
-      const fromHardware = availableByName.get(fromHardwareName);
-      if (!fromHardware || fromHardware.maxInputChannels <= 0) {
-        inputs.add(route.from);
-      }
-
-      const toDev = deviceByAlias.get(route.to);
-      const toHardwareName = toDev?.device ?? route.to;
-      const toHardware = availableByName.get(toHardwareName);
-      if (!toHardware || toHardware.maxOutputChannels <= 0) {
-        outputs.add(route.to);
-      }
-    }
-
-    return { unavailableInputs: inputs, unavailableOutputs: outputs };
-  }, [availableDevices.length, availableByName, deviceByAlias, currentConfig.routes]);
-
-  const missingSet = useMemo(() => {
-    const set = new Set([...unavailableInputs, ...unavailableOutputs]);
-    if (availableDevices.length > 0) {
-      for (const d of currentConfig.devices) {
-        if (d.device !== "" && !availableByName.has(d.device)) {
-          set.add(d.name || d.device);
-        }
-      }
-    }
-    return set;
-  }, [
-    unavailableInputs,
-    unavailableOutputs,
-    availableDevices.length,
-    availableByName,
-    currentConfig.devices,
-  ]);
+  const unavailableOutputs = useMemo(
+    () => new Set(configStatus.unavailableOutputs),
+    [configStatus.unavailableOutputs],
+  );
+  const missingSet = useMemo(
+    () => new Set(configStatus.missingDeviceAliases),
+    [configStatus.missingDeviceAliases],
+  );
+  const disabledRouteIndices = useMemo(
+    () => new Set(configStatus.disabledRouteIndices),
+    [configStatus.disabledRouteIndices],
+  );
 
   // Disconnected devices: not participating in any route
   const disconnectedSet = useMemo(
@@ -207,9 +199,7 @@ export default function App() {
         const hardware = availableByName.get(data.device);
         const totalIn = hardware?.maxInputChannels ?? data.channels.totalIn;
         const totalOut = hardware?.maxOutputChannels ?? data.channels.totalOut;
-        // A device with no routes is never added to unavailableInputs/Outputs,
-        // so also flag it missing when its hardware name isn't found in the system.
-        const hardwareMissing = data.device !== "" && availableDevices.length > 0 && !hardware;
+        const hardwareMissing = missingSet.has(alias);
         return {
           ...node,
           data: {
@@ -224,15 +214,15 @@ export default function App() {
           },
         };
       }),
-    [nodes, availableByName, availableDevices.length, unavailableInputs, unavailableOutputs],
+    [nodes, availableByName, missingSet, unavailableInputs, unavailableOutputs],
   );
 
   const resolvedEdges = useMemo(
     () =>
-      edges.map((edge) => {
+      edges.map((edge, index) => {
         const data = edge.data as RouteEdgeData | undefined;
         if (!data) return edge;
-        const disabled = unavailableInputs.has(data.from) || unavailableOutputs.has(data.to);
+        const disabled = disabledRouteIndices.has(index);
         return {
           ...edge,
           animated: !data.mute && !disabled,
@@ -242,7 +232,7 @@ export default function App() {
           },
         };
       }),
-    [edges, unavailableInputs, unavailableOutputs],
+    [edges, disabledRouteIndices],
   );
 
   // ── Filtered flow state for rendering ───────────────────
@@ -524,14 +514,14 @@ export default function App() {
   const handleSave = useCallback(async () => {
     if (!isDirty) return;
     setSaveState("saving");
-    setServerErrors([]);
     const cfg = flowToConfig({ nodes, edges }, config.engine);
     try {
       const res = await api.saveConfig(cfg);
       if (res.errors.length > 0) {
-        setServerErrors(res.errors);
+        setConfigStatus((status) => ({ ...status, errors: res.errors }));
         setSaveState("error");
       } else {
+        setConfigStatus(await api.statusConfig(cfg));
         setSavedConfigFingerprint(configFingerprint(cfg));
         setSaveState("saved");
         setTimeout(() => setSaveState("idle"), 2000);
@@ -558,7 +548,7 @@ export default function App() {
       setEdges(flow.edges);
       setSavedConfigFingerprint(configFingerprint(flowToConfig(flow, res.config.engine)));
       setSaveState("idle");
-      setServerErrors([]);
+      setConfigStatus(emptyConfigStatus());
       setSelection({ kind: "none" });
       setLoadState("loaded");
     } catch (e) {
@@ -763,7 +753,7 @@ export default function App() {
               {activeBottomTab === "validation" ? (
                 <ValidationPanel errors={allErrors} warnings={clientWarnings} />
               ) : (
-                <TomlPreview toml={stringifyConfig(currentConfig)} />
+                <TomlPreview toml={tomlPreview} />
               )}
             </div>
           )}

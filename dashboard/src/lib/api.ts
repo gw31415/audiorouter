@@ -7,7 +7,17 @@
  */
 
 import type { AudiorouterConfig } from "../types";
-import type { ValidationError, ValidationWarning } from "./validate";
+
+export interface ValidationError {
+  /** Dot-path like "devices[1].name" or "routes[0].from_channels". */
+  path: string;
+  message: string;
+}
+
+export interface ValidationWarning {
+  path: string;
+  message: string;
+}
 
 export interface ConfigLoadResponse {
   config: AudiorouterConfig;
@@ -25,6 +35,19 @@ export interface ConfigSaveResponse {
   raw: string;
   /** Server-side validation errors (empty = valid). */
   errors: ValidationError[];
+}
+
+export interface ConfigPreviewResponse {
+  raw: string;
+}
+
+export interface ConfigStatusResponse {
+  errors: ValidationError[];
+  warnings: ValidationWarning[];
+  unavailableInputs: string[];
+  unavailableOutputs: string[];
+  disabledRouteIndices: number[];
+  missingDeviceAliases: string[];
 }
 
 /** Audio device info returned by audiorouter-dashboard-api. */
@@ -69,6 +92,18 @@ export const api = {
   saveConfig: (config: AudiorouterConfig) =>
     fetchJSON<ConfigSaveResponse>("/config", {
       method: "PUT",
+      body: JSON.stringify({ config } satisfies ConfigSaveRequest),
+    }),
+
+  previewConfig: (config: AudiorouterConfig) =>
+    fetchJSON<ConfigPreviewResponse>("/config/preview", {
+      method: "POST",
+      body: JSON.stringify({ config } satisfies ConfigSaveRequest),
+    }),
+
+  statusConfig: (config: AudiorouterConfig) =>
+    fetchJSON<ConfigStatusResponse>("/config/status", {
+      method: "POST",
       body: JSON.stringify({ config } satisfies ConfigSaveRequest),
     }),
 

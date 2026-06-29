@@ -16,8 +16,7 @@
   "dependencies": {
     "@xyflow/react": "^12.11.1",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "smol-toml": "^1.7.0"
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",

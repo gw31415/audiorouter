@@ -11,8 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use audiorouter_core::api_types::{
-    ConfigLoadResponse, ConfigSaveRequest, ConfigSaveResponse, ValidateResponse,
-    read_dashboard_config, stringify_dashboard_config, validate_dashboard_config,
+    ConfigLoadResponse, ConfigPreviewResponse, ConfigSaveRequest, ConfigSaveResponse,
+    ConfigStatusResponse, ValidateResponse, dashboard_config_status, read_dashboard_config,
+    stringify_dashboard_config, validate_dashboard_config,
 };
 use audiorouter_core::{DevicesResponse, list_audio_devices};
 use axum::extract::State;
@@ -149,6 +150,8 @@ impl DashboardEvent {
 pub fn api_router(state: DashboardState) -> Router {
     Router::new()
         .route("/config", get(get_config).put(put_config))
+        .route("/config/preview", post(post_config_preview))
+        .route("/config/status", post(post_config_status))
         .route("/validate", post(post_validate))
         .route("/devices", get(get_devices))
         .route("/runtime", get(get_runtime))
@@ -207,6 +210,18 @@ async fn put_config(
         raw,
         errors: Vec::new(),
     }))
+}
+
+async fn post_config_preview(
+    Json(req): Json<ConfigSaveRequest>,
+) -> Result<Json<ConfigPreviewResponse>, ApiError> {
+    Ok(Json(ConfigPreviewResponse {
+        raw: stringify_dashboard_config(&req.config)?,
+    }))
+}
+
+async fn post_config_status(Json(req): Json<ConfigSaveRequest>) -> Json<ConfigStatusResponse> {
+    Json(dashboard_config_status(req.config))
 }
 
 async fn post_validate(Json(req): Json<ConfigSaveRequest>) -> Json<ValidateResponse> {
