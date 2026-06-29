@@ -122,14 +122,21 @@ export function DeviceNode({ data, selected }: NodeProps) {
             {/* Show effective name (alias if set, else device name) */}
             {d.name || d.device}
           </div>
-          {missingLabel ? (
-            <div className="text-xs italic" style={{ color: "var(--color-ar-disabled)" }}>
-              {missingLabel}
-            </div>
-          ) : d.name && d.name !== d.device ? (
-            // Only show device name when alias is set AND differs from device
-            <div className="truncate text-xs text-[var(--color-muted-foreground)]">{d.device}</div>
-          ) : null}
+          {(() => {
+            const subtitle = missingLabel ?? (d.name && d.name !== d.device ? d.device : null);
+            return (
+              <div
+                className={`truncate text-xs${subtitle ? "" : " invisible"}`}
+                style={
+                  missingLabel
+                    ? { color: "var(--color-ar-disabled)", fontStyle: "italic" }
+                    : { color: "var(--color-muted-foreground)" }
+                }
+              >
+                {subtitle ?? " "}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Right-aligned indicators (mirrors tui.rs title line) */}
