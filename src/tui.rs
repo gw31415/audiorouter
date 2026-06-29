@@ -644,7 +644,9 @@ fn draw_routing_graph(
             } else if r.gain_db == 0.0 {
                 6 // "──────"
             } else {
-                format!("{:+.1}dB", r.gain_db).width() as u16
+                // Include leading space — gain_text prepends one for numeric
+                // labels to visually separate them from the line.
+                format!(" {:+.1}dB", r.gain_db).width() as u16
             };
             src + dst + gain + 6
         })
@@ -955,8 +957,9 @@ fn draw_edge(
         Style::default().fg(COLOR_GAIN)
     };
     // Leading space breaks the line visually before a numeric value.
-    // Omit it when the label itself is dashes — they should flow into the line.
-    let gain_text = if route.gain_db == 0.0 && !disabled && !route.mute {
+    // Omit it for dashes / OFF / X — they use route_style and should flow
+    // into the line without a gap.
+    let gain_text = if disabled || route.mute || route.gain_db == 0.0 {
         gain_label.clone()
     } else {
         format!(" {}", gain_label)
