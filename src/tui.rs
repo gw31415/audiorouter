@@ -17,7 +17,7 @@
 //! ├────────────────────────────────────────────────────────┤
 //! │ Log / warnings                                        │
 //! ├────────────────────────────────────────────────────────┤
-//! │ [q]quit [r]reload [^L]reset peaks [↑↓]scroll [Esc]quit │
+//! │ [q/Esc]quit  [r]reload  [^L]reset peaks  [↑↓]scroll    │
 //! └────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -38,7 +38,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -91,6 +91,7 @@ pub fn run(
         last_device_poll: Instant::now(),
         show_disconnected_devices: false,
         show_missing_devices: true,
+        show_help: false,
         config_path: config_path.to_path_buf(),
     };
 
@@ -120,6 +121,7 @@ struct LoopState {
     last_device_poll: Instant,
     show_disconnected_devices: bool,
     show_missing_devices: bool,
+    show_help: bool,
     config_path: std::path::PathBuf,
 }
 
@@ -148,9 +150,20 @@ fn run_loop(
                 continue;
             }
             match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
+                KeyCode::Char('q') => {
                     engine.stop();
                     break;
+                }
+                KeyCode::Esc => {
+                    if st.show_help {
+                        st.show_help = false;
+                    } else {
+                        engine.stop();
+                        break;
+                    }
+                }
+                KeyCode::Char('?') => {
+                    st.show_help = !st.show_help;
                 }
                 KeyCode::Char('r') => {
                     // Manual reload trigger.
@@ -300,6 +313,7 @@ fn run_loop(
                     scroll,
                     st.show_disconnected_devices,
                     st.show_missing_devices,
+                    st.show_help,
                     &st.config_path,
                 )?;
                 std::thread::sleep(Duration::from_secs(2));
@@ -320,6 +334,7 @@ fn run_loop(
             scroll,
             st.show_disconnected_devices,
             st.show_missing_devices,
+            st.show_help,
             &st.config_path,
         )?;
     }
@@ -348,6 +363,7 @@ fn draw(
     scroll: u16,
     show_disconnected: bool,
     show_missing: bool,
+    show_help: bool,
     config_path: &std::path::Path,
 ) -> Result<(), crate::error::AppError> {
     terminal
@@ -395,6 +411,9 @@ fn draw(
             );
             draw_log(f, chunks[2], log_lines, scroll);
             draw_help(f, chunks[3]);
+            if show_help {
+                draw_help_popup(f, area);
+            }
         })
         .map_err(term_err)?;
 
@@ -1366,27 +1385,80 @@ fn contains_log_level(s: &str, level: &str) -> bool {
 // ── Help bar ───────────────────────────────────────────────────────────────
 
 fn draw_help(f: &mut ratatui::Frame<'_>, area: Rect) {
-    let key = Style::default()
+    let key_style = Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
-    let help = Paragraph::new(Line::from(vec![
-        Span::raw(" "),
-        Span::styled("[q]", key),
-        Span::raw(" quit  "),
-        Span::styled("[r]", key),
-        Span::raw(" reload  "),
-        Span::styled("[^L]", key),
-        Span::raw(" reset peaks  "),
-        Span::styled("[h]", key),
-        Span::raw(" toggle disconnected  "),
-        Span::styled("[H]", key),
-        Span::raw(" toggle missing  "),
-        Span::styled("[↑↓]", key),
-        Span::raw(" scroll log  "),
-        Span::styled("[Esc]", key),
-        Span::raw(" quit  "),
-    ]));
-    f.render_widget(help, area);
+
+    let items: &[(&str, &str)] = &[
+        ("[q/Esc]", "quit"),
+        ("[r]", "reload"),
+        ("[↑↓]", "scroll log"),
+        ("[?]", "help"),
+    ];
+
+    let total_content: u16 = items
+        .iter()
+        .map(|(k, d)| (k.width() + 1 + d.width()) as u16)
+        .sum();
+    let n = items.len() as u16;
+    // space-around: n+1 equal gaps (before first, between each, after last)
+    let remaining = area.width.saturating_sub(total_content);
+    let gap = remaining / (n + 1);
+    let mut extra = remaining % (n + 1);
+
+    let mut spans: Vec<Span<'_>> = Vec::new();
+    for (k, d) in items {
+        let g = if extra > 0 {
+            extra -= 1;
+            gap + 1
+        } else {
+            gap
+        };
+        spans.push(Span::raw(" ".repeat(g as usize)));
+        spans.push(Span::styled(k.to_string(), key_style));
+        spans.push(Span::raw(format!(" {d}")));
+    }
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width: width.min(area.width),
+        height: height.min(area.height),
+    }
+}
+
+fn draw_help_popup(f: &mut ratatui::Frame<'_>, area: Rect) {
+    const W: u16 = 52;
+    const H: u16 = 10; // 2 border + 8 content rows
+
+    let popup = centered_rect(W, H, area);
+    f.render_widget(Clear, popup);
+
+    let k = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let s = Style::default().fg(Color::DarkGray);
+
+    // Key column is 19 chars wide (indent + key text); description follows.
+    let lines: Vec<Line<'_>> = vec![
+        Line::from(vec![Span::raw("  "), Span::styled("[q]", k), Span::styled(" / ", s), Span::styled("[Esc]", k), Span::raw("      "), Span::raw("quit")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[r]", k), Span::raw("              "), Span::raw("reload config")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[^L]", k), Span::raw("             "), Span::raw("reset peak-hold / clip")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[h]", k), Span::raw("              "), Span::raw("toggle disconnected devices")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[H]", k), Span::raw("              "), Span::raw("toggle missing devices")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[↑]", k), Span::styled(" / ", s), Span::styled("[↓]", k), Span::raw("        "), Span::raw("scroll log")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[PgUp]", k), Span::styled(" / ", s), Span::styled("[PgDn]", k), Span::raw("  "), Span::raw("scroll log by page")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[?]", k), Span::raw("              "), Span::raw("toggle this help")]),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Keybindings ")
+        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+    f.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
