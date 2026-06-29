@@ -735,8 +735,24 @@ export default function App() {
               </svg>
             ) : saveState === "error" ? (
               <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                <line x1="2" y1="2" x2="9" y2="9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                <line x1="9" y1="2" x2="2" y2="9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                <line
+                  x1="2"
+                  y1="2"
+                  x2="9"
+                  y2="9"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+                <line
+                  x1="9"
+                  y1="2"
+                  x2="2"
+                  y2="9"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
               </svg>
             ) : !isDirty ? (
               <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
@@ -757,7 +773,15 @@ export default function App() {
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-                <line x1="1.5" y1="9.5" x2="9.5" y2="9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                <line
+                  x1="1.5"
+                  y1="9.5"
+                  x2="9.5"
+                  y2="9.5"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
               </svg>
             )}
             <span>

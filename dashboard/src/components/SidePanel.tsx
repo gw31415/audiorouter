@@ -432,9 +432,7 @@ function TogglePill({
       className="flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-sm transition duration-150 disabled:cursor-not-allowed disabled:opacity-40"
       style={{
         borderColor: on ? activeColor : "var(--color-border)",
-        background: on
-          ? `color-mix(in oklch, ${activeColor} 12%, transparent)`
-          : "transparent",
+        background: on ? `color-mix(in oklch, ${activeColor} 12%, transparent)` : "transparent",
         color: on ? activeColor : "var(--color-muted-foreground)",
       }}
     >
