@@ -1233,7 +1233,7 @@ fn draw_device_node(
             Style::default().fg(COLOR_OUT).add_modifier(Modifier::BOLD)
         };
 
-        let mut pos = x + 1;
+        let mut pos = x + 2;
         if !up_str.is_empty() {
             f.buffer_mut().set_string(pos, y, &up_str, up_style);
             pos += up_str.width() as u16;
