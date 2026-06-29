@@ -105,6 +105,9 @@ export default function App() {
   // When CoreAudio devices connect/disconnect, the backend emits
   // `devices_changed` events. We refresh the device list and config status
   // so the UI reflects the new connectivity without manual refresh.
+  const [sseDeviceVersion, setSseDeviceVersion] = useState(0);
+  const [configFileChanged, setConfigFileChanged] = useState(false);
+
   const sseRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -121,6 +124,10 @@ export default function App() {
       setSseDeviceVersion((v) => v + 1);
     });
 
+    es.addEventListener("config_changed", () => {
+      setConfigFileChanged(true);
+    });
+
     es.onerror = () => {
       // EventSource auto-reconnects; nothing to do here
     };
@@ -130,8 +137,6 @@ export default function App() {
       sseRef.current = null;
     };
   }, []);
-
-  const [sseDeviceVersion, setSseDeviceVersion] = useState(0);
 
   // ── Derive config from flow state ──────────────────────
   const currentConfig = useMemo(
@@ -582,6 +587,7 @@ export default function App() {
       setSaveState("idle");
       setConfigStatus(emptyConfigStatus());
       setSelection({ kind: "none" });
+      setConfigFileChanged(false);
       setLoadState("loaded");
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
@@ -648,10 +654,18 @@ export default function App() {
           <button
             type="button"
             onClick={handleReload}
-            className="h-7 rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-muted-foreground)] transition hover:bg-[var(--color-muted)]"
-            title="設定ファイルから再読み込み"
+            className={`h-7 rounded-md border px-2.5 text-xs transition ${
+              configFileChanged
+                ? "animate-pulse border-[var(--color-ar-border)] bg-[color-mix(in_oklch,var(--color-ar-border)_15%,transparent)] font-semibold text-[var(--color-ar-border)] hover:bg-[color-mix(in_oklch,var(--color-ar-border)_25%,transparent)]"
+                : "border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:bg-[var(--color-muted)]"
+            }`}
+            title={
+              configFileChanged
+                ? "設定ファイルが外部で変更されました — クリックして再読み込み"
+                : "設定ファイルから再読み込み"
+            }
           >
-            再読込
+            {configFileChanged ? "⟳ 再読込" : "再読込"}
           </button>
 
           <button
