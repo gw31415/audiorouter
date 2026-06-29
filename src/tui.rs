@@ -1165,14 +1165,17 @@ fn draw_device_node(
     // Inner lines: spectrum bars or missing-device message.
     let spectrum_rows = h.saturating_sub(3).max(1);
     if unavailable {
-        let missing_label = "device missing";
+        let missing_label = "(device missing)";
+        let label_w = missing_label.len() as u16;
+        let label_x = inner_x + (inner_w.saturating_sub(label_w)) / 2;
+        let label_y = y + 2 + spectrum_rows / 2;
         f.buffer_mut().set_string(
-            inner_x,
-            y + 2,
+            label_x,
+            label_y,
             truncate_display(missing_label, inner_w as usize),
             Style::default()
                 .fg(Color::White)
-                .add_modifier(Modifier::DIM),
+                .add_modifier(Modifier::DIM | Modifier::ITALIC),
         );
     } else if let Some(meter) = meter_bank.get(&node.alias, 0) {
         let snap = meter.snapshot();
