@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+/*
+ * shadcn/ui-inspired dark theme with audiorouter semantic colors.
+ *
+ * Semantic palette mirrors src/tui.rs:
+ *   border  = Cyan   — node borders
+ *   in      = Green  — capture / source channels (▲)
+ *   out     = Magenta — playback / destination channels (▼)
+ *   route   = LightBlue — route path lines
+ *   gain    = Yellow — gain values, limiter
+ *   clip    = Red    — clip / overload
+ *   muted   = DarkGray — unavailable / disabled
+ */
+@theme {
+  /* ── shadcn base ─────────────────────────────────── */
+  --color-background: oklch(0.145 0.005 260);
+  --color-card: oklch(0.178 0.006 260);
+  --color-card-foreground: oklch(0.922 0.004 260);
+  --color-popover: oklch(0.178 0.006 260);
+  --color-foreground: oklch(0.922 0.004 260);
+  --color-muted: oklch(0.235 0.006 260);
+  --color-muted-foreground: oklch(0.555 0.01 260);
+  --color-border: oklch(0.295 0.008 260);
+  --color-input: oklch(0.295 0.008 260);
+  --color-ring: oklch(0.72 0.22 220);
+  --color-ring-glow: oklch(0.72 0.22 220 / 0.45);
+  --color-ring-glow-far: oklch(0.72 0.22 220 / 0.18);
+  /* dim-selected: same lightness as ring but nearly achromatic — selected but clearly not active */
+  --color-ring-dim: oklch(0.72 0.05 240);
+  --color-ring-dim-glow: oklch(0.72 0.05 240 / 0.45);
+  --color-ring-dim-glow-far: oklch(0.72 0.05 240 / 0.18);
+  --color-primary: oklch(0.62 0.14 250);
+  --color-primary-foreground: oklch(0.985 0 0);
+  --color-secondary: oklch(0.235 0.006 260);
+  --color-secondary-foreground: oklch(0.922 0.004 260);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.985 0 0);
+
+  /* ── audiorouter semantic ────────────────────────── */
+  --color-ar-border: oklch(0.69 0.12 195); /* Cyan */
+  --color-ar-in: oklch(0.68 0.16 145); /* Green */
+  --color-ar-out: oklch(0.65 0.22 330); /* Magenta */
+  --color-ar-route: oklch(0.7 0.13 230); /* LightBlue */
+  --color-ar-gain: oklch(0.78 0.16 85); /* Yellow */
+  --color-ar-clip: oklch(0.6 0.24 25); /* Red */
+  --color-ar-disabled: oklch(0.42 0.01 260); /* DarkGray */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Hiragino Sans",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar (minimal, shadcn-like) ────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.4 0.01 260);
+}
+
+/* Remove number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ── Channel pair connector animation ───────────────── */
+@keyframes ar-flow-right {
+  from {
+    background-position-x: 0;
+  }
+  to {
+    background-position-x: 8px;
+  }
+}
+
+/* ── React Flow overrides ────────────────────────────── */
+.react-flow__attribution {
+  display: none;
+}
+
+/*
+ * Edge interaction paths need a real stroke colour so that
+ * pointer-events: visibleStroke can hit-test them.  React Flow sets
+ * stroke-opacity:0 inline (invisible) but never sets stroke itself,
+ * leaving it at the SVG initial value "none" — which makes the 30px
+ * hit area collapse to 0px.  Providing any concrete colour restores
+ * the full interactionWidth hit area while staying invisible.
+ */
+.react-flow__edge-interaction {
+  stroke: var(--color-foreground);
+}
+
+/* ── Lock state cursor overrides ─────────────────────── */
+/* Handles show crosshair by default; when locked, connection is not allowed */
+[data-locked] .react-flow__handle {
+  cursor: not-allowed !important;
+}
+/* Edge update zones suggest draggability; suppress when locked */
+[data-locked] .react-flow__edgeupdater {
+  cursor: not-allowed !important;
+}
+/* Resize handles (if any node uses NodeResizer) */
+[data-locked] .react-flow__resize-control {
+  cursor: not-allowed !important;
+}
+
+.react-flow__controls {
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.3);
+}
+
+.react-flow__controls-button {
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-foreground);
+  fill: var(--color-foreground);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--color-muted);
+}
+
+.react-flow__edge-text {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.react-flow__edge-textbg {
+  fill: var(--color-card);
+}

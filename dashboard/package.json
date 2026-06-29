@@ -1,0 +1,42 @@
+{
+  "name": "audiorouter-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.ts",
+    "build": "vp build",
+    "preview": "vp preview",
+    "check": "vp check",
+    "test": "vp test",
+    "format": "vp fmt",
+    "lint": "vp lint",
+    "dev:vite": "vp dev"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "smol-toml": "^1.7.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^26.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3",
+    "vite": "*",
+    "vite-plus": "^0.2.1"
+  },
+  "engines": {
+    "node": ">=23.6.0",
+    "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": "npm:@voidzero-dev/vite-plus-core@latest"
+    }
+  }
+}

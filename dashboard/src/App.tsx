@@ -1,0 +1,892 @@
+import {
+  useEdgesState,
+  useNodesState,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type Node,
+  type NodeChange,
+} from "@xyflow/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { EngineBar } from "./components/EngineBar";
+import type { DeviceNodeData, RouteEdgeData } from "./components/flow-types";
+import {
+  applyAutoLayout,
+  configToFlow,
+  createRouteEdge,
+  flowToConfig,
+  recomputeNodeData,
+} from "./components/flow-utils";
+import { FlowCanvas } from "./components/FlowCanvas";
+import { SidePanel } from "./components/SidePanel";
+import type { Selection } from "./components/SidePanel";
+import { TomlPreview } from "./components/TomlPreview";
+import { ValidationPanel } from "./components/ValidationPanel";
+import { api, type AudioDevice } from "./lib/api";
+import { cascadeHidden, disconnectedDeviceNames } from "./lib/graph";
+import { stringifyConfig } from "./lib/toml";
+import { validateConfig, warnConfig } from "./lib/validate";
+import type { AudiorouterConfig, DeviceConfig, RouteConfig } from "./types";
+import { createEmptyConfig } from "./types";
+
+type LoadState = "loading" | "loaded" | "error";
+type BottomTab = "validation" | "toml";
+
+function configFingerprint(config: AudiorouterConfig): string {
+  return JSON.stringify(config);
+}
+
+export default function App() {
+  const [config, setConfig] = useState<AudiorouterConfig>(createEmptyConfig());
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [loadError, setLoadError] = useState("");
+  const [configPath, setConfigPath] = useState("");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [savedConfigFingerprint, setSavedConfigFingerprint] = useState<string | null>(null);
+  const [serverErrors, setServerErrors] = useState<ReturnType<typeof validateConfig>>([]);
+  const [activeBottomTab, setActiveBottomTab] = useState<BottomTab | null>(null);
+  const [selection, setSelection] = useState<Selection>({ kind: "none" });
+  const [isInteractive, setIsInteractive] = useState(true);
+
+  // ── Device visibility toggles (mirror tui.rs 'h'/'H' keys) ──
+  // showDisconnected: show devices not participating in any route
+  // showMissing:  show devices whose hardware is not found on the system
+  const [showDisconnected, setShowDisconnected] = useState(false);
+  // Mirrors tui.rs default: missing devices are shown (dimmed) unless hidden with H.
+  const [showMissing, setShowMissing] = useState(true);
+
+  // ── Known CoreAudio devices (for autocomplete + missing detection) ──
+  const [availableDevices, setAvailableDevices] = useState<AudioDevice[]>([]);
+
+  // React Flow state
+  const initial = useMemo(() => configToFlow(config), []);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
+
+  // ── Load config + devices on mount ──────────────────────
+  useEffect(() => {
+    api
+      .loadConfig()
+      .then((res) => {
+        setConfig(res.config);
+        setConfigPath(res.path);
+        const flow = configToFlow(res.config);
+        setNodes(flow.nodes);
+        setEdges(flow.edges);
+        setSavedConfigFingerprint(configFingerprint(flowToConfig(flow, res.config.engine)));
+        setSaveState("idle");
+        setLoadState("loaded");
+      })
+      .catch((e) => {
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoadState("error");
+      });
+
+    // Fetch available CoreAudio devices (non-blocking — empty on failure)
+    api
+      .listDevices()
+      .then((res) => setAvailableDevices(res.all))
+      .catch(() => {
+        /* silently ignore — device list is best-effort */
+      });
+  }, []);
+
+  // ── Derive config from flow state ──────────────────────
+  const currentConfig = useMemo(
+    () => flowToConfig({ nodes, edges }, config.engine),
+    [nodes, edges, config.engine],
+  );
+  const currentConfigFingerprint = useMemo(() => configFingerprint(currentConfig), [currentConfig]);
+  const isDirty =
+    savedConfigFingerprint !== null && currentConfigFingerprint !== savedConfigFingerprint;
+
+  const clientErrors = validateConfig(currentConfig);
+  const clientWarnings = warnConfig(currentConfig);
+  const allErrors = [...clientErrors, ...serverErrors];
+
+  // ── Compute device visibility (mirrors tui.rs) ──────────
+  // Use effective names throughout (name="" → device)
+  const deviceNames = currentConfig.devices.map((d) => d.name || d.device);
+  const routeEdges = currentConfig.routes.map((r) => ({
+    from: r.from,
+    to: r.to,
+  }));
+
+  // Resolve hardware availability per role, mirroring devices.rs:
+  // - route.from requires an available input device
+  // - route.to requires an available output device
+  // A device may therefore be missing only for input, only for output, or both.
+  const availableByName = useMemo(
+    () => new Map(availableDevices.map((d) => [d.name, d])),
+    [availableDevices],
+  );
+  const deviceByAlias = useMemo(
+    () => new Map(currentConfig.devices.map((d) => [d.name || d.device, d])),
+    [currentConfig.devices],
+  );
+
+  const { unavailableInputs, unavailableOutputs } = useMemo(() => {
+    const inputs = new Set<string>();
+    const outputs = new Set<string>();
+
+    // Best-effort: if the browser cannot fetch device inventory, avoid dimming
+    // every route as missing.
+    if (availableDevices.length === 0) {
+      return { unavailableInputs: inputs, unavailableOutputs: outputs };
+    }
+
+    for (const route of currentConfig.routes) {
+      const fromDev = deviceByAlias.get(route.from);
+      const fromHardwareName = fromDev?.device ?? route.from;
+      const fromHardware = availableByName.get(fromHardwareName);
+      if (!fromHardware || fromHardware.maxInputChannels <= 0) {
+        inputs.add(route.from);
+      }
+
+      const toDev = deviceByAlias.get(route.to);
+      const toHardwareName = toDev?.device ?? route.to;
+      const toHardware = availableByName.get(toHardwareName);
+      if (!toHardware || toHardware.maxOutputChannels <= 0) {
+        outputs.add(route.to);
+      }
+    }
+
+    return { unavailableInputs: inputs, unavailableOutputs: outputs };
+  }, [availableDevices.length, availableByName, deviceByAlias, currentConfig.routes]);
+
+  const missingSet = useMemo(() => {
+    const set = new Set([...unavailableInputs, ...unavailableOutputs]);
+    if (availableDevices.length > 0) {
+      for (const d of currentConfig.devices) {
+        if (d.device !== "" && !availableByName.has(d.device)) {
+          set.add(d.name || d.device);
+        }
+      }
+    }
+    return set;
+  }, [
+    unavailableInputs,
+    unavailableOutputs,
+    availableDevices.length,
+    availableByName,
+    currentConfig.devices,
+  ]);
+
+  // Disconnected devices: not participating in any route
+  const disconnectedSet = useMemo(
+    () => new Set(disconnectedDeviceNames(deviceNames, routeEdges)),
+    [deviceNames, routeEdges],
+  );
+
+  // Build the initial hidden set based on toggle states
+  const hiddenSet = useMemo(() => {
+    const hidden = new Set<string>();
+    if (!showDisconnected) {
+      for (const name of disconnectedSet) hidden.add(name);
+    }
+    if (!showMissing) {
+      for (const name of missingSet) hidden.add(name);
+    }
+    // Cascade: after hiding, devices that lose all routes also get hidden
+    return cascadeHidden(deviceNames, routeEdges, hidden);
+  }, [disconnectedSet, missingSet, showDisconnected, showMissing, deviceNames, routeEdges]);
+
+  // Counters for toggle button badges
+  const disconnectedCount = disconnectedSet.size;
+  const missingCount = missingSet.size;
+
+  // Apply resolved availability to graph data for rendering.
+  // This mirrors tui.rs:
+  // - draw_device_node dims unavailable aliases
+  // - draw_edge dims/OFFs routes where route_enabled(index) is false
+  const resolvedNodes = useMemo(
+    () =>
+      nodes.map((node) => {
+        const data = node.data as DeviceNodeData;
+        const alias = data.name || data.device;
+        const hardware = availableByName.get(data.device);
+        const totalIn = hardware?.maxInputChannels ?? data.channels.totalIn;
+        const totalOut = hardware?.maxOutputChannels ?? data.channels.totalOut;
+        // A device with no routes is never added to unavailableInputs/Outputs,
+        // so also flag it missing when its hardware name isn't found in the system.
+        const hardwareMissing = data.device !== "" && availableDevices.length > 0 && !hardware;
+        return {
+          ...node,
+          data: {
+            ...data,
+            channels: {
+              ...data.channels,
+              totalIn,
+              totalOut,
+            },
+            missingInput: unavailableInputs.has(alias) || hardwareMissing,
+            missingOutput: unavailableOutputs.has(alias) || hardwareMissing,
+          },
+        };
+      }),
+    [nodes, availableByName, availableDevices.length, unavailableInputs, unavailableOutputs],
+  );
+
+  const resolvedEdges = useMemo(
+    () =>
+      edges.map((edge) => {
+        const data = edge.data as RouteEdgeData | undefined;
+        if (!data) return edge;
+        const disabled = unavailableInputs.has(data.from) || unavailableOutputs.has(data.to);
+        return {
+          ...edge,
+          animated: !data.mute && !disabled,
+          data: {
+            ...data,
+            disabled,
+          },
+        };
+      }),
+    [edges, unavailableInputs, unavailableOutputs],
+  );
+
+  // ── Filtered flow state for rendering ───────────────────
+  const { filteredNodes, filteredEdges } = useMemo(() => {
+    const hiddenIds = new Set([...hiddenSet].map((name) => `device-${name}`));
+
+    // Selected items are always shown regardless of filters.
+    const pinnedNodeIds = new Set<string>();
+    if (selection.kind === "device") {
+      pinnedNodeIds.add(selection.id);
+    } else if (selection.kind === "edge") {
+      const selectedEdge = resolvedEdges.find((e) => e.id === selection.id);
+      if (selectedEdge) {
+        pinnedNodeIds.add(selectedEdge.source);
+        pinnedNodeIds.add(selectedEdge.target);
+      }
+    }
+
+    const isHiddenNode = (n: (typeof resolvedNodes)[number]) => {
+      if (pinnedNodeIds.has(n.id)) return false;
+      if (hiddenIds.has(n.id)) return true;
+      const d = n.data as DeviceNodeData;
+      const alias = d.name || d.device;
+      return !!alias && hiddenIds.has(`device-${alias}`);
+    };
+
+    const filteredNodes = resolvedNodes.filter((n) => !isHiddenNode(n));
+    const visibleNodeIds = new Set(filteredNodes.map((n) => n.id));
+
+    const filteredEdges = resolvedEdges
+      .filter((e) => {
+        if (selection.kind === "edge" && e.id === selection.id) return true;
+        return visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target);
+      })
+      .sort((a, b) => {
+        // Selected edges render last (on top). Among non-selected, dim edges
+        // render before non-dim so non-dim paths appear above dim paths.
+        if (a.selected !== b.selected) return a.selected ? 1 : -1;
+        const ad = a.data as RouteEdgeData | undefined;
+        const bd = b.data as RouteEdgeData | undefined;
+        const aDim = ad?.disabled || ad?.mute ? 0 : 1;
+        const bDim = bd?.disabled || bd?.mute ? 0 : 1;
+        return aDim - bDim;
+      });
+    return { filteredNodes, filteredEdges };
+  }, [resolvedNodes, resolvedEdges, hiddenSet, selection]);
+
+  // ── Edit guard ──────────────────────────────────────────
+  // Single source of truth for the lock check.
+  // Every callback that mutates config must call this first.
+  // Acts as a safety net even when a UI component forgets disabled={!isInteractive}.
+  const canEdit = useCallback((): boolean => isInteractive, [isInteractive]);
+
+  // ── Flow callbacks ──────────────────────────────────────
+
+  // Filter out destructive/positional changes when the canvas is locked.
+  // "remove" changes are triggered by the Delete key; "position" by dragging.
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      if (!canEdit()) {
+        const safe = changes.filter((c) => c.type !== "remove" && c.type !== "position");
+        if (safe.length > 0) onNodesChange(safe);
+        return;
+      }
+      onNodesChange(changes);
+    },
+    [canEdit, onNodesChange],
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange[]) => {
+      if (!canEdit()) {
+        const safe = changes.filter((c) => c.type !== "remove");
+        if (safe.length > 0) onEdgesChange(safe);
+        return;
+      }
+      onEdgesChange(changes);
+    },
+    [canEdit, onEdgesChange],
+  );
+
+  const handleConnect = useCallback(
+    (conn: Connection) => {
+      if (!canEdit()) return;
+      const sourceNode = nodes.find((n) => n.id === conn.source);
+      const targetNode = nodes.find((n) => n.id === conn.target);
+      if (!sourceNode || !targetNode) return;
+
+      const newEdge = createRouteEdge(sourceNode, targetNode, edges.length);
+      setEdges((eds) => addEdgeSafe(eds, newEdge));
+
+      const cfg = flowToConfig({ nodes, edges: [...edges, newEdge] }, config.engine);
+      setNodes((nds) => recomputeNodeData(nds, cfg));
+    },
+    [canEdit, nodes, edges, config.engine, setEdges, setNodes],
+  );
+
+  const handleNodeClick = useCallback((nodeId: string) => {
+    setSelection({ kind: "device", id: nodeId });
+  }, []);
+
+  const handleEdgeClick = useCallback((edgeId: string) => {
+    setSelection({ kind: "edge", id: edgeId });
+  }, []);
+
+  const handlePaneClick = useCallback(() => {
+    setSelection({ kind: "none" });
+  }, []);
+
+  const [layoutVersion, setLayoutVersion] = useState(0);
+
+  const handleLayout = useCallback(() => {
+    setNodes((nds) => applyAutoLayout(nds, edges));
+    setLayoutVersion((v) => v + 1);
+  }, [edges, setNodes]);
+
+  const handleToggleInteractive = useCallback(() => {
+    setIsInteractive((v) => !v);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelection({ kind: "none" });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Keep node/edge .selected in sync with our selection state.
+  // Needed when the canvas is locked: React Flow won't update .selected
+  // on click because elementsSelectable is false in its store.
+  useEffect(() => {
+    setNodes((nds) =>
+      nds.map((n) => ({
+        ...n,
+        selected: selection.kind === "device" && n.id === selection.id,
+      })),
+    );
+    setEdges((eds) =>
+      eds.map((e) => ({
+        ...e,
+        selected: selection.kind === "edge" && e.id === selection.id,
+      })),
+    );
+  }, [selection, setNodes, setEdges]);
+
+  // ── Device operations ───────────────────────────────────
+  const handleAddDevice = useCallback(() => {
+    if (!canEdit()) return;
+    // Use a UUID-based placeholder so the ID follows the device-* convention
+    // from the start. handleUpdateDevice renames it to device-${alias} once the
+    // user sets a name or device field.
+    const id = `device-${crypto.randomUUID().slice(0, 8)}`;
+    const data: DeviceNodeData = {
+      name: "", // empty — uses device name as alias at runtime
+      device: "",
+      limiter: false,
+      role: "input",
+      channels: { chIn: 0, chOut: 0, totalIn: 0, totalOut: 0 },
+      missingInput: false,
+      missingOutput: false,
+    };
+    const newNode: Node = {
+      id,
+      type: "device",
+      position: { x: 300 + Math.random() * 100, y: 100 + Math.random() * 100 },
+      data,
+    };
+    setNodes((nds) => [...nds, newNode]);
+    setSelection({ kind: "device", id });
+  }, [canEdit, setNodes]);
+
+  const handleUpdateDevice = useCallback(
+    (id: string, patch: Partial<DeviceConfig>) => {
+      if (!canEdit()) return;
+
+      const targetNode = nodes.find((n) => n.id === id);
+      if (!targetNode) return;
+      const oldData = targetNode.data as DeviceNodeData;
+      const oldAlias = oldData.name || oldData.device;
+      const newName = "name" in patch ? (patch.name ?? "") : oldData.name;
+      const newDevice = "device" in patch ? (patch.device ?? "") : oldData.device;
+      const newAlias = newName || newDevice;
+
+      // Keep node ID aligned with alias: device-${alias}.
+      // Fall back to the current ID when alias is still empty (unnamed device).
+      const newId = newAlias ? `device-${newAlias}` : id;
+
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== id) return n;
+          return { ...n, id: newId, data: { ...oldData, ...patch } };
+        }),
+      );
+
+      // When alias or node ID changes, update all edges that reference it.
+      if (oldAlias !== newAlias || newId !== id) {
+        setEdges((eds) =>
+          eds.map((e) => {
+            const data = e.data as RouteEdgeData | undefined;
+            const newSource = e.source === id ? newId : e.source;
+            const newTarget = e.target === id ? newId : e.target;
+            const aliasChanged = data && oldAlias !== newAlias;
+            return {
+              ...e,
+              source: newSource,
+              target: newTarget,
+              data: aliasChanged
+                ? {
+                    ...data,
+                    from: data.from === oldAlias ? newAlias : data.from,
+                    to: data.to === oldAlias ? newAlias : data.to,
+                  }
+                : e.data,
+            };
+          }),
+        );
+      }
+
+      // Keep selection in sync when the node ID changes.
+      if (newId !== id) {
+        setSelection((sel) =>
+          sel.kind === "device" && sel.id === id ? { kind: "device", id: newId } : sel,
+        );
+      }
+    },
+    [canEdit, nodes, setNodes, setEdges, setSelection],
+  );
+
+  const handleDeleteDevice = useCallback(
+    (id: string) => {
+      if (!canEdit()) return;
+      setNodes((nds) => nds.filter((n) => n.id !== id));
+      setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
+      setSelection({ kind: "none" });
+    },
+    [canEdit, setNodes, setEdges],
+  );
+
+  // ── Route operations ────────────────────────────────────
+  const handleUpdateRoute = useCallback(
+    (id: string, patch: Partial<RouteConfig>) => {
+      if (!canEdit()) return;
+      setEdges((eds) =>
+        eds.map((e) => {
+          if (e.id !== id) return e;
+          const oldData = e.data as RouteEdgeData;
+          const newData: RouteEdgeData = { ...oldData, ...patch };
+          return {
+            ...e,
+            data: newData,
+            animated: !newData.mute,
+          };
+        }),
+      );
+    },
+    [canEdit, setEdges],
+  );
+
+  const handleDeleteRoute = useCallback(
+    (id: string) => {
+      if (!canEdit()) return;
+      setEdges((eds) => eds.filter((e) => e.id !== id));
+      setSelection({ kind: "none" });
+    },
+    [canEdit, setEdges],
+  );
+
+  // ── Engine ──────────────────────────────────────────────
+  const handleEngineChange = useCallback(
+    (engine: AudiorouterConfig["engine"]) => {
+      if (!canEdit()) return;
+      setConfig((c) => ({ ...c, engine }));
+    },
+    [canEdit],
+  );
+
+  // ── Save / Reload ───────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!isDirty) return;
+    setSaveState("saving");
+    setServerErrors([]);
+    const cfg = flowToConfig({ nodes, edges }, config.engine);
+    try {
+      const res = await api.saveConfig(cfg);
+      if (res.errors.length > 0) {
+        setServerErrors(res.errors);
+        setSaveState("error");
+      } else {
+        setSavedConfigFingerprint(configFingerprint(cfg));
+        setSaveState("saved");
+        setTimeout(() => setSaveState("idle"), 2000);
+      }
+    } catch {
+      setSaveState("error");
+    }
+  }, [isDirty, nodes, edges, config.engine]);
+
+  const handleReload = useCallback(async () => {
+    if (isDirty) {
+      const ok = window.confirm(
+        "未保存の変更があります。破棄して設定ファイルを再読み込みしますか？",
+      );
+      if (!ok) return;
+    }
+    setLoadState("loading");
+    try {
+      const res = await api.loadConfig();
+      setConfig(res.config);
+      setConfigPath(res.path);
+      const flow = configToFlow(res.config);
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+      setSavedConfigFingerprint(configFingerprint(flowToConfig(flow, res.config.engine)));
+      setSaveState("idle");
+      setServerErrors([]);
+      setSelection({ kind: "none" });
+      setLoadState("loaded");
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+      setLoadState("error");
+    }
+  }, [isDirty, setNodes, setEdges]);
+
+  // ── Loading states ──────────────────────────────────────
+  if (loadState === "loading") {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="animate-pulse text-sm text-[var(--color-muted-foreground)]">
+          設定ファイルを読み込んでいます…
+        </div>
+      </div>
+    );
+  }
+
+  if (loadState === "error") {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="text-center">
+          <p className="mb-2 font-mono text-sm" style={{ color: "var(--color-destructive)" }}>
+            読み込みエラー
+          </p>
+          <p className="mb-4 font-mono text-xs text-[var(--color-muted-foreground)]">{loadError}</p>
+          <button
+            type="button"
+            onClick={handleReload}
+            className="rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm text-[var(--color-primary-foreground)] transition hover:opacity-90"
+          >
+            再読み込み
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const isValid = allErrors.length === 0;
+  const saveDisabled = !isValid || saveState === "saving" || !isDirty;
+  const toggleBottomTab = (tab: BottomTab) => {
+    setActiveBottomTab((current) => (current === tab ? null : tab));
+  };
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* ── Top bar ────────────────────────────────────── */}
+      <header className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-card)] px-4 py-2.5">
+        <div className="flex items-center gap-4">
+          <h1 className="text-sm font-bold tracking-tight text-[var(--color-foreground)]">
+            <span style={{ color: "var(--color-ar-border)" }}>audio</span>router
+            <span className="ml-1.5 text-xs font-normal text-[var(--color-muted-foreground)]">
+              dashboard
+            </span>
+          </h1>
+          <EngineBar
+            engine={config.engine}
+            onChange={handleEngineChange}
+            readOnly={!isInteractive}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleReload}
+            className="h-7 rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-muted-foreground)] transition hover:bg-[var(--color-muted)]"
+            title="設定ファイルから再読み込み"
+          >
+            再読込
+          </button>
+
+          <button
+            type="button"
+            disabled={saveDisabled}
+            onClick={handleSave}
+            title={
+              !isDirty
+                ? "保存済みです"
+                : !isValid
+                  ? "エラーがあるため保存できません"
+                  : "設定ファイルへ保存"
+            }
+            className="h-7 rounded-md px-3 text-xs font-medium transition"
+            style={
+              saveDisabled
+                ? {
+                    background: "var(--color-muted)",
+                    color: "var(--color-muted-foreground)",
+                    cursor: "not-allowed",
+                    opacity: 0.5,
+                  }
+                : {
+                    background: "var(--color-primary)",
+                    color: "var(--color-primary-foreground)",
+                  }
+            }
+          >
+            {saveState === "saving" ? "…" : !isDirty ? "保存済" : "保存"}
+          </button>
+        </div>
+      </header>
+
+      {/* ── Main area: canvas + side panel ───────────── */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Canvas */}
+        <div className="relative flex-1">
+          <FlowCanvas
+            nodes={filteredNodes}
+            edges={filteredEdges}
+            onNodesChange={handleNodesChange}
+            onEdgesChange={handleEdgesChange}
+            onConnect={handleConnect}
+            onNodeClick={handleNodeClick}
+            onEdgeClick={handleEdgeClick}
+            onPaneClick={handlePaneClick}
+            onLayout={handleLayout}
+            layoutVersion={layoutVersion}
+            isInteractive={isInteractive}
+            onToggleInteractive={handleToggleInteractive}
+            onUpdateRoute={handleUpdateRoute}
+          />
+          {/* Floating "Add Device" button */}
+          <button
+            type="button"
+            onClick={handleAddDevice}
+            disabled={!isInteractive}
+            className="absolute top-3 left-3 z-10 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-xs text-[var(--color-foreground)] shadow-md transition hover:bg-[var(--color-muted)] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            + デバイス追加
+          </button>
+          {/* Visibility filter checkboxes */}
+          <div className="absolute top-3 right-3 z-10 flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-card)]/90 px-3 py-2 shadow-md backdrop-blur">
+            <FilterCheckbox
+              checked={showDisconnected}
+              onChange={() => setShowDisconnected((v) => !v)}
+              label="Disconnected"
+              count={disconnectedCount}
+            />
+            <FilterCheckbox
+              checked={showMissing}
+              onChange={() => setShowMissing((v) => !v)}
+              label="Missing"
+              count={missingCount}
+            />
+          </div>
+          {/* Config path badge */}
+          {configPath && (
+            <div className="absolute right-3 bottom-3 z-10 rounded bg-[var(--color-card)]/80 px-2 py-1 font-mono text-[10px] text-[var(--color-muted-foreground)] backdrop-blur">
+              {configPath}
+            </div>
+          )}
+        </div>
+
+        {/* Side panel */}
+        <aside className="w-72 shrink-0 overflow-y-auto border-l border-[var(--color-border)] bg-[var(--color-card)]">
+          <SidePanel
+            selection={selection}
+            nodes={resolvedNodes}
+            edges={resolvedEdges}
+            config={currentConfig}
+            onUpdateDevice={handleUpdateDevice}
+            onUpdateRoute={handleUpdateRoute}
+            onDeleteDevice={handleDeleteDevice}
+            onDeleteRoute={handleDeleteRoute}
+            onAddDevice={handleAddDevice}
+            availableDevices={availableDevices}
+            readOnly={!isInteractive}
+          />
+        </aside>
+      </div>
+
+      {/* ── Bottom panel: IDE-like tabs for validation + TOML ─────────── */}
+      <section
+        className={`shrink-0 border-t border-[var(--color-border)] bg-[var(--color-card)] ${
+          activeBottomTab ? "h-64" : "h-9"
+        }`}
+      >
+        <div className="flex h-full flex-col">
+          <div
+            className={`flex h-9 shrink-0 items-end bg-[var(--color-muted)]/35 px-3 ${
+              activeBottomTab ? "border-b border-[var(--color-border)]" : ""
+            }`}
+          >
+            <BottomTabButton
+              active={activeBottomTab === "validation"}
+              statusLabel={isValid ? "valid" : `${allErrors.length} err`}
+              statusTone={isValid ? "ok" : "error"}
+              badge={allErrors.length > 0 ? allErrors.length : clientWarnings.length}
+              tone={allErrors.length > 0 ? "error" : clientWarnings.length > 0 ? "warning" : "ok"}
+              onClick={() => toggleBottomTab("validation")}
+            />
+            <BottomTabButton
+              active={activeBottomTab === "toml"}
+              label="config.toml"
+              onClick={() => toggleBottomTab("toml")}
+            />
+          </div>
+          {activeBottomTab && (
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {activeBottomTab === "validation" ? (
+                <ValidationPanel errors={allErrors} warnings={clientWarnings} />
+              ) : (
+                <TomlPreview toml={stringifyConfig(currentConfig)} />
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * IDE-like bottom panel tab.
+ */
+function BottomTabButton({
+  active,
+  label,
+  statusLabel,
+  statusTone,
+  badge,
+  tone,
+  onClick,
+}: {
+  active: boolean;
+  label?: string;
+  statusLabel?: string;
+  statusTone?: "ok" | "error";
+  badge?: number;
+  tone?: "ok" | "warning" | "error";
+  onClick: () => void;
+}) {
+  const statusColor = statusTone === "error" ? "var(--color-destructive)" : "var(--color-ar-in)";
+  const badgeColor =
+    tone === "error"
+      ? "var(--color-destructive)"
+      : tone === "warning"
+        ? "var(--color-ar-gain)"
+        : "var(--color-ar-in)";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="relative -mb-px flex h-9 items-center gap-2 border-x border-t px-3 text-xs font-medium transition"
+      style={
+        active
+          ? {
+              borderColor: "var(--color-border)",
+              borderBottomColor: "var(--color-card)",
+              background: "var(--color-card)",
+              color: "var(--color-foreground)",
+            }
+          : {
+              borderColor: "transparent",
+              background: "transparent",
+              color: "var(--color-muted-foreground)",
+            }
+      }
+    >
+      {label && <span>{label}</span>}
+      {statusLabel && (
+        <span
+          className="inline-flex items-center gap-1 font-mono text-[10px]"
+          style={{ color: statusColor }}
+        >
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusColor }} />
+          {statusLabel}
+        </span>
+      )}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className="rounded-full px-1.5 py-0.5 font-mono text-[10px] leading-none"
+          style={{
+            background: `color-mix(in oklch, ${badgeColor} 18%, transparent)`,
+            color: badgeColor,
+          }}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Toggle button for device visibility (mirrors tui.rs 'h'/'H' keys).
+ * Shows a badge with the count of hidden devices.
+ */
+function FilterCheckbox({
+  checked,
+  onChange,
+  label,
+  count,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+  count: number;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 select-none">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        className="h-3.5 w-3.5 cursor-pointer rounded"
+      />
+      <span className="text-xs font-medium" style={{ color: "var(--color-foreground)" }}>
+        {label}
+      </span>
+      <span
+        className="rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none"
+        style={{
+          background: count > 0 ? "var(--color-secondary)" : "var(--color-muted)",
+          color: count > 0 ? "var(--color-secondary-foreground)" : "var(--color-muted-foreground)",
+        }}
+      >
+        {count}
+      </span>
+    </label>
+  );
+}
+
+function addEdgeSafe(edges: Edge[], newEdge: Edge): Edge[] {
+  const exists = edges.some((e) => e.source === newEdge.source && e.target === newEdge.target);
+  if (exists) return edges;
+  return [...edges, newEdge];
+}
