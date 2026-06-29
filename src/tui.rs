@@ -215,6 +215,12 @@ fn run_loop(
                     engine.stop();
                     break;
                 }
+                KeyCode::Char('g') => {
+                    scroll = max_log_scroll(st.log_lines.len());
+                }
+                KeyCode::Char('G') => {
+                    scroll = 0;
+                }
                 KeyCode::Up => {
                     scroll = clamp_log_scroll(scroll.saturating_add(1), st.log_lines.len());
                 }
@@ -1433,7 +1439,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 
 fn draw_help_popup(f: &mut ratatui::Frame<'_>, area: Rect) {
     const W: u16 = 52;
-    const H: u16 = 10; // 2 border + 8 content rows
+    const H: u16 = 12; // 2 border + 10 content rows
 
     let popup = centered_rect(W, H, area);
     f.render_widget(Clear, popup);
@@ -1450,6 +1456,8 @@ fn draw_help_popup(f: &mut ratatui::Frame<'_>, area: Rect) {
         Line::from(vec![Span::raw("  "), Span::styled("[H]", k), Span::raw("              "), Span::raw("toggle missing devices")]),
         Line::from(vec![Span::raw("  "), Span::styled("[↑]", k), Span::styled(" / ", s), Span::styled("[↓]", k), Span::raw("        "), Span::raw("scroll log")]),
         Line::from(vec![Span::raw("  "), Span::styled("[PgUp]", k), Span::styled(" / ", s), Span::styled("[PgDn]", k), Span::raw("  "), Span::raw("scroll log by page")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[g]", k), Span::raw("              "), Span::raw("scroll to top (oldest)")]),
+        Line::from(vec![Span::raw("  "), Span::styled("[G]", k), Span::raw("              "), Span::raw("scroll to bottom (newest)")]),
         Line::from(vec![Span::raw("  "), Span::styled("[?]", k), Span::raw("              "), Span::raw("toggle this help")]),
     ];
 
