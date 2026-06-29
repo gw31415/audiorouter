@@ -116,10 +116,8 @@ export function DeviceNode({ data, selected }: NodeProps) {
       </div>
 
       {/* ── Node body ─────────────────────────────────────── */}
-      <div
-        className={`flex items-center gap-2 px-3 py-2.5 ${missingLabel ? "justify-center" : ""}`}
-      >
-        <div className={`min-w-0 flex-1 ${missingLabel ? "text-center" : ""}`}>
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold" style={{ color: nameFgColor }}>
             {/* Show effective name (alias if set, else device name) */}
             {d.name || d.device}
