@@ -657,28 +657,107 @@ fn draw_routing_graph(
     }
 
     // ── Draw edges first (so nodes overlap them) ──────────────────
-    for (route_index, route) in plan.routes.iter().enumerate() {
-        if let (Some(src), Some(dst)) = (
-            nodes.iter().find(|n| n.alias == route.from),
-            nodes.iter().find(|n| n.alias == route.to),
-        ) {
-            let src_right = src.x + node_w;
-            let src_mid_y = src.y + node_h / 2;
-            let dst_left = dst.x;
-            let dst_mid_y = dst.y + node_h / 2;
-            // Midpoint between source right edge and destination left edge.
-            let mid_x = (src_right + dst_left) / 2;
-            draw_edge(
-                f,
-                src_right,
-                src_mid_y,
-                dst_left,
-                dst_mid_y,
-                route,
-                !resolved.route_enabled(route_index),
-                mid_x,
-            );
+    // Pre-compute staggered geometry so parallel routes don't share the same
+    // pixel row or column:
+    //   • src_y / dst_y — spread exit/entry points within each node's height
+    //   • mid_x         — spread vertical segments within the inter-layer corridor
+
+    // Collect visible edges as (route_index, src_node_index, dst_node_index).
+    let visible_edges: Vec<(usize, usize, usize)> = plan
+        .routes
+        .iter()
+        .enumerate()
+        .filter_map(|(ri, route)| {
+            let si = nodes.iter().position(|n| n.alias == route.from)?;
+            let di = nodes.iter().position(|n| n.alias == route.to)?;
+            Some((ri, si, di))
+        })
+        .collect();
+
+    let ne = visible_edges.len();
+    let mut src_ys = vec![0u16; ne];
+    let mut dst_ys = vec![0u16; ne];
+    let mut mid_xs = vec![0u16; ne];
+
+    // Spread exit y-positions within the source node for all its outgoing routes.
+    {
+        let mut groups: std::collections::HashMap<usize, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (ei, &(_, si, _)) in visible_edges.iter().enumerate() {
+            groups.entry(si).or_default().push(ei);
         }
+        for (si, mut indices) in groups {
+            indices.sort_unstable();
+            let n = indices.len();
+            let node = &nodes[si];
+            let inner_h = node_h.saturating_sub(2) as usize; // rows inside the border
+            for (i, ei) in indices.into_iter().enumerate() {
+                src_ys[ei] = if n == 1 {
+                    node.y + node_h / 2
+                } else {
+                    let offset = i * inner_h.saturating_sub(1) / (n - 1);
+                    node.y + 1 + offset as u16
+                };
+            }
+        }
+    }
+
+    // Spread entry y-positions within the destination node for all incoming routes.
+    {
+        let mut groups: std::collections::HashMap<usize, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (ei, &(_, _, di)) in visible_edges.iter().enumerate() {
+            groups.entry(di).or_default().push(ei);
+        }
+        for (di, mut indices) in groups {
+            indices.sort_unstable();
+            let n = indices.len();
+            let node = &nodes[di];
+            let inner_h = node_h.saturating_sub(2) as usize;
+            for (i, ei) in indices.into_iter().enumerate() {
+                dst_ys[ei] = if n == 1 {
+                    node.y + node_h / 2
+                } else {
+                    let offset = i * inner_h.saturating_sub(1) / (n - 1);
+                    node.y + 1 + offset as u16
+                };
+            }
+        }
+    }
+
+    // Spread mid_x within each inter-node corridor (same src_right / dst_left pair).
+    {
+        let mut groups: std::collections::HashMap<(u16, u16), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (ei, &(_, si, di)) in visible_edges.iter().enumerate() {
+            let sr = nodes[si].x + node_w;
+            let dl = nodes[di].x;
+            groups.entry((sr, dl)).or_default().push(ei);
+        }
+        for ((sr, dl), mut indices) in groups {
+            indices.sort_unstable();
+            let n = indices.len() as i32;
+            let base = ((sr + dl) / 2) as i32;
+            let lo = sr as i32 + 1;
+            let hi = (dl as i32 - 1).max(lo);
+            for (i, ei) in indices.into_iter().enumerate() {
+                let offset = i as i32 - (n - 1) / 2;
+                mid_xs[ei] = (base + offset).clamp(lo, hi) as u16;
+            }
+        }
+    }
+
+    for (ei, &(ri, si, di)) in visible_edges.iter().enumerate() {
+        draw_edge(
+            f,
+            nodes[si].x + node_w,
+            src_ys[ei],
+            nodes[di].x,
+            dst_ys[ei],
+            &plan.routes[ri],
+            !resolved.route_enabled(ri),
+            mid_xs[ei],
+        );
     }
 
     // ── Draw device nodes ─────────────────────────────────────────
@@ -796,7 +875,9 @@ fn draw_edge(
             f.buffer_mut().set_string(x, y1, line_h, route_style);
         }
         // Corner at source side.
-        let corner1 = if y2 > y1 { "┌" } else { "└" };
+        // Horizontal arrives from the left; vertical departs toward y2.
+        // y2 > y1 → going down → LEFT+DOWN = ┐; y2 < y1 → going up → LEFT+UP = ┘
+        let corner1 = if y2 > y1 { "┐" } else { "┘" };
         f.buffer_mut().set_string(half1, y1, corner1, route_style);
 
         // Vertical segment.
@@ -805,7 +886,9 @@ fn draw_edge(
             f.buffer_mut().set_string(half1, y, line_v, route_style);
         }
         // Corner at target side.
-        let corner2 = if y2 > y1 { "┐" } else { "┘" };
+        // Vertical arrives from y1; horizontal departs to the right.
+        // y2 > y1 → arrived from above → UP+RIGHT = └; y2 < y1 → arrived from below → DOWN+RIGHT = ┌
+        let corner2 = if y2 > y1 { "└" } else { "┌" };
         f.buffer_mut().set_string(half1, y2, corner2, route_style);
 
         // Horizontal from mid to target.
