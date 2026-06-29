@@ -15,7 +15,7 @@ use audiorouter_core::api_types::{
     ConfigStatusResponse, ValidateResponse, dashboard_config_status, read_dashboard_config,
     stringify_dashboard_config, validate_dashboard_config,
 };
-use audiorouter_core::{DevicesResponse, list_audio_devices};
+use audiorouter_core::{ConfigFileWatcher, DevicePoller, DevicesResponse, list_audio_devices};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -88,6 +88,51 @@ impl DashboardState {
             message: message.into(),
             timestamp: chrono_like_timestamp(),
         });
+    }
+
+    /// Spawn a background task that polls CoreAudio every 2 seconds and emits
+    /// `DevicesChanged` events when device connections, channel counts, or
+    /// defaults change.
+    ///
+    /// Uses the shared `DevicePoller` from `audiorouter-core` — the same
+    /// primitive the TUI uses — so device-change detection logic is not
+    /// duplicated.
+    ///
+    /// The returned `JoinHandle` can be awaited or aborted; the watcher lives
+    /// until the runtime is shut down.
+    pub fn spawn_device_watcher(&self) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut poller = DevicePoller::new(std::time::Duration::from_secs(2));
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Some(events) = poller.poll() {
+                    tracing::info!("device change detected: {}", events.join("; "));
+                    state.emit_devices_changed(events);
+                }
+            }
+        })
+    }
+
+    /// Spawn a background task that watches the config file for external edits
+    /// and emits `ConfigChanged` SSE events when the file changes on disk.
+    ///
+    /// Uses the shared `ConfigFileWatcher` from `audiorouter-core` — the same
+    /// primitive the TUI uses for hot-reload — so config-change detection logic
+    /// is not duplicated.
+    pub fn spawn_config_watcher(&self) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        let config_path = self.config_path.clone();
+        tokio::spawn(async move {
+            let watcher = ConfigFileWatcher::new(&config_path);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if watcher.poll() {
+                    tracing::info!("config file changed on disk");
+                    state.emit_config_changed();
+                }
+            }
+        })
     }
 }
 

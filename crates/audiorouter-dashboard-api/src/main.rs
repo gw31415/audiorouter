@@ -10,6 +10,8 @@ const DEFAULT_ADDR: &str = "127.0.0.1:7822";
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse()?;
     let state = DashboardState::new(options.config_path);
+    let _device_watcher = state.spawn_device_watcher();
+    let _config_watcher = state.spawn_config_watcher();
     let listener = tokio::net::TcpListener::bind(options.addr).await?;
     let local_addr = listener.local_addr()?;
 

@@ -42,8 +42,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::audio::{AudioEngine, ConfigWatcher, EngineState};
+use crate::audio::{AudioEngine, EngineState};
 use crate::validate::ValidatedConfig;
+use audiorouter_core::{ConfigFileWatcher, DevicePoller};
 
 const TICK_RATE: Duration = Duration::from_millis(50); // 20 fps UI refresh
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -73,7 +74,8 @@ pub fn run(
     config_path: &std::path::Path,
     warnings: &[String],
 ) -> Result<(), crate::error::AppError> {
-    let watcher = ConfigWatcher::new(config_path);
+    let watcher = ConfigFileWatcher::new(config_path);
+    let mut device_poller = DevicePoller::new(DEVICE_POLL_INTERVAL);
 
     // Terminal setup
     enable_raw_mode().map_err(term_err)?;
@@ -88,7 +90,6 @@ pub fn run(
         reload_pending: None,
         reload_message: None,
         last_tick: Instant::now(),
-        last_device_poll: Instant::now(),
         show_disconnected_devices: false,
         show_missing_devices: true,
         show_help: false,
@@ -100,6 +101,7 @@ pub fn run(
         &mut terminal,
         &mut engine,
         &watcher,
+        &mut device_poller,
         start_time,
         &mut loop_state,
     );
@@ -118,7 +120,6 @@ struct LoopState {
     reload_pending: Option<Instant>,
     reload_message: Option<String>,
     last_tick: Instant,
-    last_device_poll: Instant,
     show_disconnected_devices: bool,
     show_missing_devices: bool,
     show_help: bool,
@@ -132,7 +133,8 @@ const LOG_VISIBLE_LINES: u16 = LOG_PANEL_HEIGHT.saturating_sub(2);
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     engine: &mut AudioEngine,
-    watcher: &ConfigWatcher,
+    watcher: &ConfigFileWatcher,
+    device_poller: &mut DevicePoller,
     start_time: Instant,
     st: &mut LoopState,
 ) -> Result<(), crate::error::AppError> {
@@ -282,14 +284,18 @@ fn run_loop(
                 .push(format!("[{}] {line}", timestamp(start_time)));
         }
 
-        // Poll physical device connectivity while running. Missing-device
-        // warnings are startup-only; runtime changes are logged as concise
-        // connected/disconnected events.
-        if st.last_device_poll.elapsed() >= DEVICE_POLL_INTERVAL {
-            st.last_device_poll = Instant::now();
+        // Poll physical device connectivity. DevicePoller rate-limits internally
+        // and only returns Some(events) when the system device inventory changed.
+        // When that happens, we ask the engine to re-resolve config devices and
+        // rebuild any affected streams.
+        if let Some(events) = device_poller.poll() {
+            for event in &events {
+                st.log_lines
+                    .push(format!("[{}] {event}", timestamp(start_time)));
+            }
             match engine.refresh_devices() {
-                Ok(events) => {
-                    for event in events {
+                Ok(refresh_events) => {
+                    for event in refresh_events {
                         st.log_lines
                             .push(format!("[{}] {event}", timestamp(start_time)));
                     }

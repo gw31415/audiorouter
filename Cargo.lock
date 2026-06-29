@@ -149,6 +149,7 @@ dependencies = [
  "anyhow",
  "cpal",
  "dirs",
+ "notify",
  "serde",
  "toml",
  "tracing",

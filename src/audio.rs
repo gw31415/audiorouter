@@ -375,70 +375,9 @@ impl Drop for AudioEngine {
     }
 }
 
-// ─── Config watcher ────────────────────────────────────────────────────────
-
-/// Watches the config file for changes in a background thread.
-///
-/// When a change is detected (after debounce), sets a shared flag that the
-/// main loop can poll.
-pub struct ConfigWatcher {
-    config_changed: Arc<AtomicBool>,
-}
-
-impl ConfigWatcher {
-    /// Start watching the config file. Returns a watcher handle.
-    pub fn new(config_path: &Path) -> Self {
-        let config_changed = Arc::new(AtomicBool::new(false));
-        let flag = config_changed.clone();
-        let watch_path = config_path.to_path_buf();
-
-        std::thread::spawn(move || {
-            use notify::{EventKind, RecursiveMode, Watcher};
-
-            let (tx, rx) = std::sync::mpsc::channel();
-            let mut watcher = match notify::recommended_watcher(tx) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!("config watch disabled: {e}");
-                    return;
-                }
-            };
-
-            let canonical_watch_path = std::fs::canonicalize(&watch_path).ok();
-
-            for watch_dir in config_watch_dirs(&watch_path, canonical_watch_path.as_deref()) {
-                if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
-                    tracing::warn!("config watch disabled: {e}");
-                    return;
-                }
-            }
-
-            for event in rx.into_iter().flatten() {
-                let is_config_event = config_event_matches(
-                    &event.paths,
-                    &watch_path,
-                    canonical_watch_path.as_deref(),
-                );
-                if !is_config_event {
-                    continue;
-                }
-                match event.kind {
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                        flag.store(true, Ordering::SeqCst);
-                    }
-                    _ => {}
-                }
-            }
-        });
-
-        Self { config_changed }
-    }
-
-    /// Check (and consume) the config-changed flag.
-    pub fn poll(&self) -> bool {
-        self.config_changed.swap(false, Ordering::SeqCst)
-    }
-}
+// ─── Config watcher (moved to audiorouter-core::monitor) ───────────────────
+// ConfigFileWatcher is now provided by audiorouter_core::ConfigFileWatcher.
+// The TUI imports it directly from core.
 
 /// Metadata for each route used by the output callback mixer.
 struct RouteMixMeta {
@@ -884,43 +823,6 @@ impl FromF32 for i32 {
     }
 }
 
-fn config_watch_dirs(watch_path: &Path, canonical_watch_path: Option<&Path>) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-
-    push_unique_path(
-        &mut dirs,
-        watch_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
-    );
-
-    if let Some(canonical_watch_path) = canonical_watch_path {
-        push_unique_path(
-            &mut dirs,
-            canonical_watch_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf(),
-        );
-    }
-
-    dirs
-}
-
-fn config_event_matches(
-    event_paths: &[PathBuf],
-    watch_path: &Path,
-    canonical_watch_path: Option<&Path>,
-) -> bool {
-    event_paths
-        .iter()
-        .any(|p| p == watch_path || canonical_watch_path.is_some_and(|canonical| p == canonical))
-}
-
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
-    }
-}
-
 // Use cpal's Sample trait to avoid unused-import warnings.
 const _: fn() = || {
     fn _assert_sample<T: Sample>() {}
@@ -928,35 +830,3 @@ const _: fn() = || {
         _assert_sample::<f32>();
     }
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn config_symlink_watches_and_matches_real_target_file() {
-        let link_path = PathBuf::from("/tmp/audiorouter-test/link/config.toml");
-        let target_path = PathBuf::from("/tmp/audiorouter-test/target/config.toml");
-
-        let dirs = config_watch_dirs(&link_path, Some(&target_path));
-        assert!(dirs.contains(&PathBuf::from("/tmp/audiorouter-test/link")));
-        assert!(dirs.contains(&PathBuf::from("/tmp/audiorouter-test/target")));
-
-        assert!(config_event_matches(
-            std::slice::from_ref(&target_path),
-            &link_path,
-            Some(&target_path)
-        ));
-        assert!(config_event_matches(
-            std::slice::from_ref(&link_path),
-            &link_path,
-            Some(&target_path)
-        ));
-        assert!(!config_event_matches(
-            &[PathBuf::from("/tmp/audiorouter-test/target/other.toml")],
-            &link_path,
-            Some(&target_path)
-        ));
-    }
-}

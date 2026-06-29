@@ -7,7 +7,7 @@ import {
   type Node,
   type NodeChange,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineBar } from "./components/EngineBar";
 import type { DeviceNodeData, RouteEdgeData } from "./components/flow-types";
 import {
@@ -101,6 +101,38 @@ export default function App() {
       });
   }, []);
 
+  // ── SSE: listen for device changes pushed from audiorouter-dashboard-api ──
+  // When CoreAudio devices connect/disconnect, the backend emits
+  // `devices_changed` events. We refresh the device list and config status
+  // so the UI reflects the new connectivity without manual refresh.
+  const sseRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    const es = new EventSource("/api/events");
+    sseRef.current = es;
+
+    es.addEventListener("devices_changed", () => {
+      // Refresh device inventory
+      api
+        .listDevices()
+        .then((res) => setAvailableDevices(res.all))
+        .catch(() => {});
+      // Trigger status re-evaluation by bumping the fingerprint dependency
+      setSseDeviceVersion((v) => v + 1);
+    });
+
+    es.onerror = () => {
+      // EventSource auto-reconnects; nothing to do here
+    };
+
+    return () => {
+      es.close();
+      sseRef.current = null;
+    };
+  }, []);
+
+  const [sseDeviceVersion, setSseDeviceVersion] = useState(0);
+
   // ── Derive config from flow state ──────────────────────
   const currentConfig = useMemo(
     () => flowToConfig({ nodes, edges }, config.engine),
@@ -126,7 +158,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentConfig]);
+  }, [currentConfig, sseDeviceVersion]);
 
   const allErrors = configStatus.errors;
   const clientWarnings = configStatus.warnings;
