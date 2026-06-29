@@ -54,7 +54,7 @@ pub fn active_device_names(plan: &ValidatedConfig) -> std::collections::HashSet<
 /// Return device aliases that are configured but do NOT participate in any
 /// route. These are displayed separately (at the bottom) only when the user
 /// explicitly toggles their visibility.
-pub fn inactive_device_names(plan: &ValidatedConfig) -> Vec<String> {
+pub fn disconnected_device_names(plan: &ValidatedConfig) -> Vec<String> {
     let active = active_device_names(plan);
     plan.devices
         .iter()
@@ -556,7 +556,7 @@ to_channels = [1]
     }
 
     #[test]
-    fn inactive_devices_excluded_from_layout() {
+    fn disconnected_devices_excluded_from_layout() {
         // Devices: a, b (active), lonely (no routes)
         // Route: a → b
         let plan = plan_from_toml(&format!(
@@ -583,7 +583,7 @@ to_channels = [1]
     }
 
     #[test]
-    fn inactive_device_names_correct() {
+    fn disconnected_device_names_correct() {
         // Devices: a, b, c, d — routes only reference a and b.
         let plan = plan_from_toml(&format!(
             r#"
@@ -610,15 +610,15 @@ to_channels = [1]
         assert!(!active.contains("c"));
         assert!(!active.contains("d"));
 
-        let inactive = inactive_device_names(&plan);
-        assert_eq!(inactive.len(), 2);
-        assert!(inactive.contains(&"c".to_string()));
-        assert!(inactive.contains(&"d".to_string()));
+        let disconnected = disconnected_device_names(&plan);
+        assert_eq!(disconnected.len(), 2);
+        assert!(disconnected.contains(&"c".to_string()));
+        assert!(disconnected.contains(&"d".to_string()));
     }
 
     #[test]
     fn all_devices_active_when_all_in_routes() {
-        // Every device participates in a route — no inactive devices.
+        // Every device participates in a route — no disconnected devices.
         let plan = plan_from_toml(&format!(
             r#"
 {ENGINE}
@@ -630,8 +630,8 @@ to_channels = [1]
 "#
         ));
 
-        let inactive = inactive_device_names(&plan);
-        assert!(inactive.is_empty());
+        let disconnected = disconnected_device_names(&plan);
+        assert!(disconnected.is_empty());
     }
 
     #[test]

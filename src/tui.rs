@@ -89,7 +89,7 @@ pub fn run(
         reload_message: None,
         last_tick: Instant::now(),
         last_device_poll: Instant::now(),
-        show_inactive_devices: false,
+        show_disconnected_devices: false,
         show_missing_devices: true,
         config_path: config_path.to_path_buf(),
     };
@@ -118,7 +118,7 @@ struct LoopState {
     reload_message: Option<String>,
     last_tick: Instant,
     last_device_poll: Instant,
-    show_inactive_devices: bool,
+    show_disconnected_devices: bool,
     show_missing_devices: bool,
     config_path: std::path::PathBuf,
 }
@@ -170,11 +170,11 @@ fn run_loop(
                 }
                 KeyCode::Char('h') => {
                     // Toggle visibility of devices not participating in any route.
-                    st.show_inactive_devices = !st.show_inactive_devices;
+                    st.show_disconnected_devices = !st.show_disconnected_devices;
                     st.log_lines.push(format!(
-                        "[{}] inactive devices {}",
+                        "[{}] disconnected devices {}",
                         timestamp(start_time),
-                        if st.show_inactive_devices {
+                        if st.show_disconnected_devices {
                             "shown"
                         } else {
                             "hidden"
@@ -298,7 +298,7 @@ fn run_loop(
                     &st.log_lines,
                     &st.reload_message,
                     scroll,
-                    st.show_inactive_devices,
+                    st.show_disconnected_devices,
                     st.show_missing_devices,
                     &st.config_path,
                 )?;
@@ -318,7 +318,7 @@ fn run_loop(
             &st.log_lines,
             &st.reload_message,
             scroll,
-            st.show_inactive_devices,
+            st.show_disconnected_devices,
             st.show_missing_devices,
             &st.config_path,
         )?;
@@ -345,7 +345,7 @@ fn draw(
     log_lines: &[String],
     reload_message: &Option<String>,
     scroll: u16,
-    show_inactive: bool,
+    show_disconnected: bool,
     show_missing: bool,
     config_path: &std::path::Path,
 ) -> Result<(), crate::error::AppError> {
@@ -389,7 +389,7 @@ fn draw(
                 plan,
                 resolved,
                 meter_bank,
-                show_inactive,
+                show_disconnected,
                 show_missing,
             );
             draw_log(f, chunks[2], log_lines, scroll);
@@ -523,13 +523,13 @@ fn draw_routing_graph(
     plan: &ValidatedConfig,
     resolved: &crate::devices::ResolvedAudioDevices,
     meter_bank: &crate::meter::MeterBank,
-    show_inactive: bool,
+    show_disconnected: bool,
     show_missing: bool,
 ) {
     // Build title showing current toggle/filter state with icons.
     let mut title_parts = vec!["\u{1f500} Routing Graph".to_string()]; // 🔀
-    if !show_inactive {
-        title_parts.push("\u{1f648} inactive hidden".to_string()); // 🙈
+    if !show_disconnected {
+        title_parts.push("\u{26d3}\u{fe0f}\u{200d}\u{1f4a5} disconnected hidden".to_string()); // ⛓️‍💥
     }
     if !show_missing {
         title_parts.push("\u{1f6ab} missing hidden".to_string()); // 🚫
@@ -545,17 +545,17 @@ fn draw_routing_graph(
         return;
     }
 
-    // If showing inactive devices, reserve the bottom rows for them.
-    let inactive = crate::graph::inactive_device_names(plan);
-    let inactive_area_height = if show_inactive && !inactive.is_empty() {
+    // If showing disconnected devices, reserve the bottom rows for them.
+    let disconnected = crate::graph::disconnected_device_names(plan);
+    let disconnected_area_height = if show_disconnected && !disconnected.is_empty() {
         // One line for the separator label + one line per device, clamped.
-        let h = (inactive.len() as u16 + 1).min(inner.height / 3);
+        let h = (disconnected.len() as u16 + 1).min(inner.height / 3);
         h
     } else {
         0
     };
     let graph_area = Rect {
-        height: inner.height.saturating_sub(inactive_area_height),
+        height: inner.height.saturating_sub(disconnected_area_height),
         ..inner
     };
 
@@ -689,23 +689,23 @@ fn draw_routing_graph(
         );
     }
 
-    // ── Draw inactive (non-routing) devices at the bottom ─────────
-    if show_inactive && !inactive.is_empty() {
-        draw_inactive_devices(f, inner, graph_area, &inactive, plan);
+    // ── Draw disconnected (non-routing) devices at the bottom ─────────
+    if show_disconnected && !disconnected.is_empty() {
+        draw_disconnected_devices(f, inner, graph_area, &disconnected, plan);
     }
 }
 
 /// Draw non-routing devices in a compact list at the bottom of the routing
 /// graph panel. These devices are configured but don't participate in any
 /// route — shown only when the user toggles them with `d`.
-fn draw_inactive_devices(
+fn draw_disconnected_devices(
     f: &mut ratatui::Frame<'_>,
     inner: Rect,
     graph_area: Rect,
-    inactive: &[String],
+    disconnected: &[String],
     plan: &ValidatedConfig,
 ) {
-    let label = " Inactive (no routes) ";
+    let label = " Disconnected (no routes) ";
     let separator_y = graph_area.y + graph_area.height;
     if separator_y >= inner.y + inner.height {
         return;
@@ -721,7 +721,7 @@ fn draw_inactive_devices(
     );
 
     let devices_per_line = (inner.width as usize / 24).max(1);
-    for (i, alias) in inactive.iter().enumerate() {
+    for (i, alias) in disconnected.iter().enumerate() {
         let row = i / devices_per_line;
         let col = i % devices_per_line;
         let y = separator_y + 1 + row as u16;
@@ -830,19 +830,19 @@ fn draw_edge(
     // gain on the lower row alongside whichever channel label shares it.
     let src_channels = channel_label(&route.from_channels);
     let dst_channels = channel_label(&route.to_channels);
-    let inactive = route.mute || disabled;
-    let src_ch_style = if inactive {
+    let muted = route.mute || disabled;
+    let src_ch_style = if muted {
         Style::default().fg(COLOR_IN).add_modifier(Modifier::DIM)
     } else {
         Style::default().fg(COLOR_IN).add_modifier(Modifier::BOLD)
     };
-    let dst_ch_style = if inactive {
+    let dst_ch_style = if muted {
         Style::default().fg(COLOR_OUT).add_modifier(Modifier::DIM)
     } else {
         Style::default().fg(COLOR_OUT).add_modifier(Modifier::BOLD)
     };
     let gain_style = if dim_route || route.gain_db == 0.0 {
-        route_style // blend: dim when inactive, or 0dB dashes flow into line
+        route_style // blend: dim when muted, or 0dB dashes flow into line
     } else {
         Style::default().fg(COLOR_GAIN)
     };
@@ -1246,7 +1246,7 @@ fn draw_help(f: &mut ratatui::Frame<'_>, area: Rect) {
         Span::styled("[^L]", key),
         Span::raw(" reset peaks  "),
         Span::styled("[h]", key),
-        Span::raw(" toggle inactive  "),
+        Span::raw(" toggle disconnected  "),
         Span::styled("[H]", key),
         Span::raw(" toggle missing  "),
         Span::styled("[↑↓]", key),
