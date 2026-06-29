@@ -10,7 +10,8 @@ use cpal::{Device, Host, SupportedStreamConfig, SupportedStreamConfigRange};
 use crate::ui;
 use crate::validate::ValidatedConfig;
 
-/// Print all available input and output devices. Does not read config.
+/// Print all available audio devices with their input and output channel counts.
+/// Does not read config.
 ///
 /// # Errors
 ///
@@ -18,73 +19,90 @@ use crate::validate::ValidatedConfig;
 pub fn print_devices() -> anyhow::Result<()> {
     let host = cpal::default_host();
 
-    ui::header("Input devices");
-    let default_input = host.default_input_device();
-    let default_input_name = default_input.as_ref().map(|d| d.to_string());
-    print_device_list(&host, true, default_input_name.as_deref())?;
+    let default_input_name = host.default_input_device().map(|d| d.to_string());
+    let default_output_name = host.default_output_device().map(|d| d.to_string());
 
-    ui::separator();
-    ui::header("Output devices");
-    let default_output = host.default_output_device();
-    let default_output_name = default_output.as_ref().map(|d| d.to_string());
-    print_device_list(&host, false, default_output_name.as_deref())?;
+    let input_devices = collect_devices(&host, true)?;
+    let output_devices = collect_devices(&host, false)?;
 
-    Ok(())
-}
-
-fn print_device_list(
-    host: &Host,
-    is_input: bool,
-    default_name: Option<&str>,
-) -> anyhow::Result<()> {
-    let devices = collect_devices(host, is_input)?;
-    for device in &devices {
-        print_single_device(device, is_input, default_name)?;
-    }
-    Ok(())
-}
-
-fn print_single_device(
-    device: &Device,
-    is_input: bool,
-    default_name: Option<&str>,
-) -> anyhow::Result<()> {
-    let name = device.to_string();
-    let marker = match default_name {
-        Some(dn) if dn == name => Some("default"),
-        _ => None,
-    };
-    let channel_kind = if is_input { "in" } else { "out" };
-
-    let configs = supported_configs(device, is_input);
-    match configs {
-        Ok(configs) => {
-            let max_channels = configs.iter().map(|c| c.channels()).max().unwrap_or(0);
-            let rates = collect_sample_rates(device, is_input).unwrap_or_default();
-            ui::device_entry(&name, max_channels, channel_kind, Some(&rates), marker);
-        }
-        Err(e) => {
-            ui::device_entry_unavailable(&name, marker, &format!("{e}"));
+    // Deduplicate by name (inputs first, then output-only).
+    let mut seen = HashSet::new();
+    let mut all_names: Vec<String> = Vec::new();
+    for d in input_devices.iter().chain(output_devices.iter()) {
+        let name = d.to_string();
+        if seen.insert(name.clone()) {
+            all_names.push(name);
         }
     }
 
-    Ok(())
-}
+    ui::header("Audio devices");
+    for name in &all_names {
+        let input_dev = input_devices.iter().find(|d| d.to_string() == *name);
+        let output_dev = output_devices.iter().find(|d| d.to_string() == *name);
 
-fn collect_sample_rates(device: &Device, is_input: bool) -> anyhow::Result<Vec<String>> {
-    let configs = supported_configs(device, is_input)?;
+        let is_default_input = default_input_name.as_deref() == Some(name.as_str());
+        let is_default_output = default_output_name.as_deref() == Some(name.as_str());
+        let marker = match (is_default_input, is_default_output) {
+            (true, true) => Some("default"),
+            (true, false) => Some("default in"),
+            (false, true) => Some("default out"),
+            (false, false) => None,
+        };
 
-    let mut rates: Vec<String> = Vec::new();
-    for c in configs {
-        let min = c.min_sample_rate();
-        let max = c.max_sample_rate();
-        if min == max {
-            rates.push(format!("{} Hz", min));
+        let in_cfgs = input_dev.map(|d| supported_configs(d, true));
+        let out_cfgs = output_dev.map(|d| supported_configs(d, false));
+
+        let in_ch = in_cfgs
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .and_then(|cfgs| cfgs.iter().map(|c| c.channels()).max());
+        let out_ch = out_cfgs
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .and_then(|cfgs| cfgs.iter().map(|c| c.channels()).max());
+
+        let rates: Vec<String> = if let Some(Ok(cfgs)) = &in_cfgs {
+            configs_to_rate_strings(cfgs)
+        } else if let Some(Ok(cfgs)) = &out_cfgs {
+            configs_to_rate_strings(cfgs)
         } else {
-            rates.push(format!("{}–{} Hz", min, max));
+            vec![]
+        };
+
+        if in_ch.is_none() && out_ch.is_none() {
+            let err = in_cfgs
+                .as_ref()
+                .and_then(|r| r.as_ref().err())
+                .map(|e| e.to_string())
+                .or_else(|| {
+                    out_cfgs
+                        .as_ref()
+                        .and_then(|r| r.as_ref().err())
+                        .map(|e| e.to_string())
+                })
+                .unwrap_or_else(|| "no supported configs".to_string());
+            ui::device_entry_unavailable(name, marker, &err);
+        } else {
+            ui::device_entry(name, in_ch, out_ch, Some(&rates), marker);
         }
     }
-    Ok(rates)
+
+    Ok(())
+}
+
+fn configs_to_rate_strings(configs: &[SupportedStreamConfigRange]) -> Vec<String> {
+    configs
+        .iter()
+        .map(|c| {
+            let min = c.min_sample_rate();
+            let max = c.max_sample_rate();
+            if min == max {
+                format!("{} Hz", min)
+            } else {
+                format!("{}–{} Hz", min, max)
+            }
+        })
+        .collect()
 }
 
 /// Information about a resolved audio device.

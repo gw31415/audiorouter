@@ -36,16 +36,21 @@ pub fn item_with_detail(name: impl AsRef<str>, detail: impl AsRef<str>) {
     println!("  {} {}", name.as_ref().bold(), detail.as_ref().dimmed());
 }
 
-/// Print a device list entry with channel count and optional sample rates.
+/// Print a device list entry with input/output channel counts and optional sample rates.
 /// Shows a marker (e.g. "(default)") in green after the entry.
 pub fn device_entry(
     name: &str,
-    max_channels: u16,
-    channel_kind: &str,
+    in_channels: Option<u16>,
+    out_channels: Option<u16>,
     rates: Option<&[String]>,
     marker: Option<&str>,
 ) {
-    let ch_str = format!("{} {}", max_channels, channel_kind);
+    let ch_str = match (in_channels, out_channels) {
+        (Some(i), Some(o)) => format!("{}in {}out", i, o),
+        (Some(i), None) => format!("{}in", i),
+        (None, Some(o)) => format!("{}out", o),
+        (None, None) => String::new(),
+    };
     let mut line = format!("  {}  {}", name.bold(), ch_str.magenta());
     if let Some(rates) = rates
         && !rates.is_empty()

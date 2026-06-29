@@ -1165,13 +1165,7 @@ fn draw_device_node(
     // Inner lines: spectrum bars or missing-device message.
     let spectrum_rows = h.saturating_sub(3).max(1);
     if unavailable {
-        let missing_label = if missing_input && missing_output {
-            "device missing: input + output"
-        } else if missing_input {
-            "device missing: input"
-        } else {
-            "device missing: output"
-        };
+        let missing_label = "device missing";
         f.buffer_mut().set_string(
             inner_x,
             y + 2,
