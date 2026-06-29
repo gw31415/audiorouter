@@ -2,16 +2,13 @@
 
 mod audio;
 mod cli;
-mod config;
-mod devices;
-mod error;
+pub use audiorouter_core::{config, devices, error, validate};
 mod graph;
 mod log_buffer;
 mod meter;
 mod mixer;
 mod tui;
 mod ui;
-mod validate;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -171,7 +168,31 @@ fn run_print_config_path(cli: &Cli) -> Result<(), AppError> {
 }
 
 fn run_list_devices(cli: &Cli) -> Result<(), AppError> {
-    devices::print_devices(cli.verbose > 0).map_err(|e| AppError::runtime(format!("{e}")))
+    let inventory =
+        audiorouter_core::list_audio_devices().map_err(|e| AppError::runtime(format!("{e}")))?;
+
+    ui::header("Audio devices");
+    for device in &inventory.all {
+        let marker = match (device.is_default_input, device.is_default_output) {
+            (true, true) => Some("default"),
+            (true, false) => Some("default in"),
+            (false, true) => Some("default out"),
+            (false, false) => None,
+        };
+        if device.max_input_channels == 0 && device.max_output_channels == 0 {
+            ui::device_entry_unavailable(&device.name, marker, "no supported configs");
+        } else {
+            let rates: Vec<String> = Vec::new();
+            ui::device_entry(
+                &device.name,
+                (device.max_input_channels > 0).then_some(device.max_input_channels),
+                (device.max_output_channels > 0).then_some(device.max_output_channels),
+                (cli.verbose > 0).then_some(rates.as_slice()),
+                marker,
+            );
+        }
+    }
+    Ok(())
 }
 
 fn run_check(cli: &Cli) -> Result<(), AppError> {

@@ -1,0 +1,15 @@
+[package]
+name = "audiorouter-core"
+version = "0.1.2"
+edition = "2024"
+description = "Core config, validation, device resolution, and dashboard API DTOs for audiorouter"
+license = "Apache-2.0"
+repository = "https://github.com/gw31415/audiorouter"
+
+[dependencies]
+anyhow = ">=1,<2"
+cpal = ">=0.18,<0.19"
+dirs = ">=6,<7"
+serde = { version = ">=1,<2", features = ["derive"] }
+toml = ">=1.1,<1.2"
+tracing = ">=0.1,<0.2"

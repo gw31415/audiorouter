@@ -1444,27 +1444,89 @@ fn draw_help_popup(f: &mut ratatui::Frame<'_>, area: Rect) {
     let popup = centered_rect(W, H, area);
     f.render_widget(Clear, popup);
 
-    let k = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let k = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     let s = Style::default().fg(Color::DarkGray);
 
     // Key column is 19 chars wide (indent + key text); description follows.
     let lines: Vec<Line<'_>> = vec![
-        Line::from(vec![Span::raw("  "), Span::styled("[q]", k), Span::styled(" / ", s), Span::styled("[Esc]", k), Span::raw("      "), Span::raw("quit")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[r]", k), Span::raw("              "), Span::raw("reload config")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[^L]", k), Span::raw("             "), Span::raw("reset peak-hold / clip")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[h]", k), Span::raw("              "), Span::raw("toggle disconnected devices")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[H]", k), Span::raw("              "), Span::raw("toggle missing devices")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[↑]", k), Span::styled(" / ", s), Span::styled("[↓]", k), Span::raw("        "), Span::raw("scroll log")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[PgUp]", k), Span::styled(" / ", s), Span::styled("[PgDn]", k), Span::raw("  "), Span::raw("scroll log by page")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[g]", k), Span::raw("              "), Span::raw("scroll to top (oldest)")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[G]", k), Span::raw("              "), Span::raw("scroll to bottom (newest)")]),
-        Line::from(vec![Span::raw("  "), Span::styled("[?]", k), Span::raw("              "), Span::raw("toggle this help")]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[q]", k),
+            Span::styled(" / ", s),
+            Span::styled("[Esc]", k),
+            Span::raw("      "),
+            Span::raw("quit"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[r]", k),
+            Span::raw("              "),
+            Span::raw("reload config"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[^L]", k),
+            Span::raw("             "),
+            Span::raw("reset peak-hold / clip"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[h]", k),
+            Span::raw("              "),
+            Span::raw("toggle disconnected devices"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[H]", k),
+            Span::raw("              "),
+            Span::raw("toggle missing devices"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[↑]", k),
+            Span::styled(" / ", s),
+            Span::styled("[↓]", k),
+            Span::raw("        "),
+            Span::raw("scroll log"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[PgUp]", k),
+            Span::styled(" / ", s),
+            Span::styled("[PgDn]", k),
+            Span::raw("  "),
+            Span::raw("scroll log by page"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[g]", k),
+            Span::raw("              "),
+            Span::raw("scroll to top (oldest)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[G]", k),
+            Span::raw("              "),
+            Span::raw("scroll to bottom (newest)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[?]", k),
+            Span::raw("              "),
+            Span::raw("toggle this help"),
+        ]),
     ];
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Keybindings ")
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
 
     f.render_widget(Paragraph::new(lines).block(block), popup);
 }

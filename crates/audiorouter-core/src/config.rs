@@ -2,13 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SAMPLE_RATE: u32 = 48000;
 pub const DEFAULT_BUFFER_SIZE: u32 = 256;
 
 /// Top-level config structure.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub engine: EngineConfig,
@@ -19,7 +19,7 @@ pub struct Config {
 }
 
 /// `[engine]` — sample rate and buffer size.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EngineConfig {
     #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
@@ -37,7 +37,7 @@ impl Default for EngineConfig {
 }
 
 /// `[[devices]]` — a named device alias.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DeviceConfig {
     pub name: String,
     pub device: String,
@@ -78,7 +78,7 @@ fn default_buffer_size() -> u32 {
 ///
 /// Channel numbers are stored as `usize` but represent **1-based physical
 /// channel numbers**.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RouteConfig {
     pub from: String,
     pub to: String,

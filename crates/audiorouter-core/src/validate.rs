@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::config::{Config, DeviceConfig, RouteConfig};
 
 /// A device with its inferred input/output roles and required channel counts.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ResolvedDeviceRole {
     pub name: String,
     pub device: String,
@@ -21,7 +23,7 @@ pub struct ResolvedDeviceRole {
 }
 
 /// A route that has passed pure validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidatedRoute {
     pub from: String,
     pub to: String,
@@ -32,7 +34,7 @@ pub struct ValidatedRoute {
 }
 
 /// The output of successful validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidatedConfig {
     pub config: Config,
     pub devices: Vec<ResolvedDeviceRole>,
@@ -556,7 +558,7 @@ to_channels = [1, 2]
     }
 
     #[test]
-    fn empty_routes_fails() {
+    fn empty_routes_passes() {
         let config: Config = toml::from_str(
             r#"
 [engine]
@@ -569,7 +571,9 @@ device = "DevA"
 "#,
         )
         .unwrap();
-        assert!(validate_config(config).is_err());
+        let result = validate_config(config).unwrap();
+        assert!(result.routes.is_empty());
+        assert_eq!(result.devices.len(), 1);
     }
 
     #[test]

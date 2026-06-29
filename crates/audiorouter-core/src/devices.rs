@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Host, SupportedStreamConfig, SupportedStreamConfigRange};
 
-use crate::ui;
 use crate::validate::ValidatedConfig;
 
 /// Print all available audio devices with their input and output channel counts.
@@ -17,112 +16,28 @@ use crate::validate::ValidatedConfig;
 ///
 /// Returns an error if the CPAL host or device enumeration fails.
 pub fn print_devices(show_rates: bool) -> anyhow::Result<()> {
-    let host = cpal::default_host();
+    let inventory = crate::device_inventory::list_audio_devices()?;
 
-    let default_input_name = host.default_input_device().map(|d| d.to_string());
-    let default_output_name = host.default_output_device().map(|d| d.to_string());
-
-    let input_devices = collect_devices(&host, true)?;
-    let output_devices = collect_devices(&host, false)?;
-
-    // Deduplicate by name (inputs first, then output-only).
-    let mut seen = HashSet::new();
-    let mut all_names: Vec<String> = Vec::new();
-    for d in input_devices.iter().chain(output_devices.iter()) {
-        let name = d.to_string();
-        if seen.insert(name.clone()) {
-            all_names.push(name);
-        }
-    }
-
-    ui::header("Audio devices");
-    for name in &all_names {
-        let input_dev = input_devices.iter().find(|d| d.to_string() == *name);
-        let output_dev = output_devices.iter().find(|d| d.to_string() == *name);
-
-        let is_default_input = default_input_name.as_deref() == Some(name.as_str());
-        let is_default_output = default_output_name.as_deref() == Some(name.as_str());
-        let marker = match (is_default_input, is_default_output) {
-            (true, true) => Some("default"),
-            (true, false) => Some("default in"),
-            (false, true) => Some("default out"),
-            (false, false) => None,
+    println!("Audio devices");
+    for device in &inventory.all {
+        let marker = match (device.is_default_input, device.is_default_output) {
+            (true, true) => " · default",
+            (true, false) => " · default in",
+            (false, true) => " · default out",
+            (false, false) => "",
         };
-
-        let in_cfgs = input_dev.map(|d| supported_configs(d, true));
-        let out_cfgs = output_dev.map(|d| supported_configs(d, false));
-
-        let in_ch = in_cfgs
-            .as_ref()
-            .and_then(|r| r.as_ref().ok())
-            .and_then(|cfgs| cfgs.iter().map(|c| c.channels()).max());
-        let out_ch = out_cfgs
-            .as_ref()
-            .and_then(|r| r.as_ref().ok())
-            .and_then(|cfgs| cfgs.iter().map(|c| c.channels()).max());
-
-        let rates: Vec<String> = if let Some(Ok(cfgs)) = &in_cfgs {
-            configs_to_rate_strings(cfgs)
-        } else if let Some(Ok(cfgs)) = &out_cfgs {
-            configs_to_rate_strings(cfgs)
+        let rates = if show_rates {
+            " · rates: use audiorouter check for configured sample-rate validation"
         } else {
-            vec![]
+            ""
         };
-
-        if in_ch.is_none() && out_ch.is_none() {
-            let err = in_cfgs
-                .as_ref()
-                .and_then(|r| r.as_ref().err())
-                .map(|e| e.to_string())
-                .or_else(|| {
-                    out_cfgs
-                        .as_ref()
-                        .and_then(|r| r.as_ref().err())
-                        .map(|e| e.to_string())
-                })
-                .unwrap_or_else(|| "no supported configs".to_string());
-            ui::device_entry_unavailable(name, marker, &err);
-        } else {
-            ui::device_entry(name, in_ch, out_ch, show_rates.then_some(rates.as_slice()), marker);
-        }
+        println!(
+            "  {} — {}ch in, {}ch out{}{}",
+            device.name, device.max_input_channels, device.max_output_channels, marker, rates
+        );
     }
 
     Ok(())
-}
-
-fn configs_to_rate_strings(configs: &[SupportedStreamConfigRange]) -> Vec<String> {
-    configs
-        .iter()
-        .map(|c| {
-            let min = c.min_sample_rate();
-            let max = c.max_sample_rate();
-            if min == max {
-                format_hz(min)
-            } else {
-                format!("{}–{}", format_hz(min), format_hz(max))
-            }
-        })
-        .collect()
-}
-
-fn format_hz(rate: u32) -> String {
-    if rate >= 1_000_000 {
-        let v = rate as f64 / 1_000_000.0;
-        if v.fract() == 0.0 {
-            format!("{} MHz", v as u32)
-        } else {
-            format!("{:.1} MHz", v)
-        }
-    } else if rate >= 1_000 {
-        let v = rate as f64 / 1_000.0;
-        if v.fract() == 0.0 {
-            format!("{} kHz", v as u32)
-        } else {
-            format!("{:.1} kHz", v)
-        }
-    } else {
-        format!("{} Hz", rate)
-    }
 }
 
 /// Information about a resolved audio device.
@@ -500,7 +415,7 @@ pub fn find_stream_config(
     )
 }
 
-fn collect_devices(host: &Host, is_input: bool) -> anyhow::Result<Vec<Device>> {
+pub(crate) fn collect_devices(host: &Host, is_input: bool) -> anyhow::Result<Vec<Device>> {
     let mut result = Vec::new();
     if is_input {
         for device in host.input_devices()? {
@@ -514,7 +429,7 @@ fn collect_devices(host: &Host, is_input: bool) -> anyhow::Result<Vec<Device>> {
     Ok(result)
 }
 
-fn max_channels(device: &Device, is_input: bool) -> Option<u16> {
+pub(crate) fn max_channels(device: &Device, is_input: bool) -> Option<u16> {
     let configs = supported_configs(device, is_input).ok()?;
     configs.iter().map(|c| c.channels()).max()
 }
@@ -525,7 +440,7 @@ fn max_channels(device: &Device, is_input: bool) -> Option<u16> {
 /// (`kAudioDevicePropertyStreamFormat`), which reflects the channel layout
 /// the device advertises when an app simply opens it without explicit
 /// channel configuration — the "preferred channels".
-fn preferred_channels(device: &Device, is_input: bool) -> u16 {
+pub(crate) fn preferred_channels(device: &Device, is_input: bool) -> u16 {
     let result = if is_input {
         device.default_input_config()
     } else {
@@ -579,7 +494,7 @@ pub fn verify_device_openable(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let err_fn = |err| ui::error(format!("stream error: {err}"));
+    let err_fn = |err| tracing::error!("stream error: {err}");
 
     if is_input {
         let stream = match config.sample_format() {

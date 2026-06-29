@@ -10,6 +10,7 @@ keywords = ["audio", "routing", "cpal", "tui", "mixer"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
+audiorouter-core = { path = "crates/audiorouter-core" }
 anyhow = ">=1,<2"
 clap = { version = ">=4,<5", features = ["derive"] }
 clap_complete = ">=4,<5"
@@ -26,3 +27,7 @@ crossterm = ">=0.29,<0.30"
 tracing = ">=0.1,<0.2"
 tracing-subscriber = { version = ">=0.3,<0.4", features = ["env-filter"] }
 unicode-width = ">=0.2,<0.3"
+
+[workspace]
+members = [".", "crates/audiorouter-core", "crates/audiorouter-dashboard-api"]
+resolver = "3"
