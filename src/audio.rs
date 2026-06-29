@@ -640,16 +640,16 @@ fn update_input_meters(
 
     // Representative meter: mono down-mix of preferred channels.
     let pref = preferred_channels.min(channels);
-    if pref > 0 {
-        if let Some(meter) = meter_bank.get(alias, 0) {
-            let mono: Vec<f32> = (0..frames)
-                .map(|f| {
-                    let sum: f32 = (0..pref).map(|ch| data[f * channels + ch]).sum();
-                    sum / pref as f32
-                })
-                .collect();
-            meter.update(&mono);
-        }
+    if pref > 0
+        && let Some(meter) = meter_bank.get(alias, 0)
+    {
+        let mono: Vec<f32> = (0..frames)
+            .map(|f| {
+                let sum: f32 = (0..pref).map(|ch| data[f * channels + ch]).sum();
+                sum / pref as f32
+            })
+            .collect();
+        meter.update(&mono);
     }
 }
 
@@ -813,16 +813,16 @@ fn update_output_meters(
 
     // Representative meter: mono down-mix of preferred channels.
     let pref = preferred_channels.min(channels);
-    if pref > 0 {
-        if let Some(meter) = meter_bank.get(alias, 0) {
-            let mono: Vec<f32> = (0..frames)
-                .map(|f| {
-                    let sum: f32 = (0..pref).map(|ch| data[f * channels + ch]).sum();
-                    sum / pref as f32
-                })
-                .collect();
-            meter.update(&mono);
-        }
+    if pref > 0
+        && let Some(meter) = meter_bank.get(alias, 0)
+    {
+        let mono: Vec<f32> = (0..frames)
+            .map(|f| {
+                let sum: f32 = (0..pref).map(|ch| data[f * channels + ch]).sum();
+                sum / pref as f32
+            })
+            .collect();
+        meter.update(&mono);
     }
 }
 

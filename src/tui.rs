@@ -338,6 +338,7 @@ fn clamp_log_scroll(scroll: u16, total_lines: usize) -> u16 {
 }
 
 /// Render one frame.
+#[allow(clippy::too_many_arguments)]
 fn draw(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     engine: &AudioEngine,
@@ -464,10 +465,10 @@ fn draw_status_bar(
 }
 
 fn abbreviate_home(path: &std::path::Path) -> String {
-    if let Some(home) = dirs::home_dir() {
-        if let Ok(rel) = path.strip_prefix(&home) {
-            return format!("~/{}", rel.display());
-        }
+    if let Some(home) = dirs::home_dir()
+        && let Ok(rel) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rel.display());
     }
     path.display().to_string()
 }
@@ -549,8 +550,7 @@ fn draw_routing_graph(
     let disconnected = crate::graph::disconnected_device_names(plan);
     let disconnected_area_height = if show_disconnected && !disconnected.is_empty() {
         // One line for the separator label + one line per device, clamped.
-        let h = (disconnected.len() as u16 + 1).min(inner.height / 3);
-        h
+        (disconnected.len() as u16 + 1).min(inner.height / 3)
     } else {
         0
     };
@@ -1000,6 +1000,76 @@ fn channel_label(channels: &[usize]) -> String {
         .join(",")
 }
 
+fn active_channel_counts(
+    plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
+    alias: &str,
+) -> (usize, usize) {
+    let active_input_channels: std::collections::HashSet<usize> = plan
+        .routes
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| resolved.route_enabled(*i) && r.from == alias)
+        .flat_map(|(_, r)| r.from_channels.iter().copied())
+        .collect();
+    let active_output_channels: std::collections::HashSet<usize> = plan
+        .routes
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| resolved.route_enabled(*i) && r.to == alias)
+        .flat_map(|(_, r)| r.to_channels.iter().copied())
+        .collect();
+
+    (active_input_channels.len(), active_output_channels.len())
+}
+
+fn configured_channel_counts(plan: &ValidatedConfig, alias: &str) -> (usize, usize) {
+    let input_channels: std::collections::HashSet<usize> = plan
+        .routes
+        .iter()
+        .filter(|r| r.from == alias)
+        .flat_map(|r| r.from_channels.iter().copied())
+        .collect();
+    let output_channels: std::collections::HashSet<usize> = plan
+        .routes
+        .iter()
+        .filter(|r| r.to == alias)
+        .flat_map(|r| r.to_channels.iter().copied())
+        .collect();
+
+    (input_channels.len(), output_channels.len())
+}
+
+fn channel_badge_labels(
+    unavailable: bool,
+    ch_in: usize,
+    ch_out: usize,
+    total_in: usize,
+    total_out: usize,
+) -> (String, String) {
+    if unavailable {
+        return (format!("▲{ch_in}"), format!("▼{ch_out}"));
+    }
+
+    // total=0: omit entirely. used=0 but total>0: show dimmed. used>0: show colored.
+    let up_str = if total_in > 0 {
+        format!("▲{ch_in}/{total_in}")
+    } else if ch_in > 0 {
+        format!("▲{ch_in}")
+    } else {
+        String::new()
+    };
+    let down_str = if total_out > 0 {
+        format!("▼{ch_out}/{total_out}")
+    } else if ch_out > 0 {
+        format!("▼{ch_out}")
+    } else {
+        String::new()
+    };
+
+    (up_str, down_str)
+}
+
 /// Draw a compact device node: name line + spectrum bar.
 #[allow(clippy::too_many_arguments)]
 fn draw_device_node(
@@ -1114,42 +1184,21 @@ fn draw_device_node(
     // Format: "▲routed/total" so both utilisation and capacity are visible at a glance.
     {
         let phys = resolved.devices.get(&node.alias);
-        // Count unique channels actually routed to/from this device across
-        // all active (non-disabled) routes — not the max channel index.
-        let active_input_channels: std::collections::HashSet<usize> = plan
-            .routes
-            .iter()
-            .enumerate()
-            .filter(|(i, r)| resolved.route_enabled(*i) && r.from == node.alias)
-            .flat_map(|(_, r)| r.from_channels.iter().copied())
-            .collect();
-        let active_output_channels: std::collections::HashSet<usize> = plan
-            .routes
-            .iter()
-            .enumerate()
-            .filter(|(i, r)| resolved.route_enabled(*i) && r.to == node.alias)
-            .flat_map(|(_, r)| r.to_channels.iter().copied())
-            .collect();
-        let ch_in = active_input_channels.len();
-        let ch_out = active_output_channels.len();
         let total_in = phys.map(|d| d.max_input_channels as usize).unwrap_or(0);
         let total_out = phys.map(|d| d.max_output_channels as usize).unwrap_or(0);
 
-        // total=0: omit entirely. used=0 but total>0: show dimmed. used>0: show colored.
-        let up_str = if total_in > 0 {
-            format!("▲{}/{}", ch_in, total_in)
-        } else if ch_in > 0 {
-            format!("▲{}", ch_in)
+        let (ch_in, ch_out) = if unavailable {
+            // Missing devices have no trustworthy hardware totals and their routes
+            // are disabled, so keep the configured routing intent visible instead.
+            configured_channel_counts(plan, &node.alias)
         } else {
-            String::new()
+            // Count unique channels actually routed to/from this device across
+            // all active (non-disabled) routes — not the max channel index.
+            active_channel_counts(plan, resolved, &node.alias)
         };
-        let down_str = if total_out > 0 {
-            format!("▼{}/{}", ch_out, total_out)
-        } else if ch_out > 0 {
-            format!("▼{}", ch_out)
-        } else {
-            String::new()
-        };
+
+        let (up_str, down_str) =
+            channel_badge_labels(unavailable, ch_in, ch_out, total_in, total_out);
 
         let up_style = if unavailable || ch_in == 0 {
             Style::default().fg(COLOR_IN).add_modifier(Modifier::DIM)
@@ -1375,4 +1424,56 @@ fn timestamp(start: Instant) -> String {
 /// Map std::io::Error to AppError.
 fn term_err(e: std::io::Error) -> crate::error::AppError {
     crate::error::AppError::runtime(format!("terminal error: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::validate::validate_config;
+
+    #[test]
+    fn missing_channel_badges_show_configured_counts_without_totals() {
+        let (up, down) = channel_badge_labels(true, 2, 0, 0, 0);
+
+        assert_eq!(up, "▲2");
+        assert_eq!(down, "▼0");
+    }
+
+    #[test]
+    fn available_channel_badges_keep_existing_total_behavior() {
+        let (up, down) = channel_badge_labels(false, 2, 0, 4, 2);
+
+        assert_eq!(up, "▲2/4");
+        assert_eq!(down, "▼0/2");
+    }
+
+    #[test]
+    fn configured_channel_counts_include_routes_disabled_by_missing_device() {
+        let config: Config = toml::from_str(
+            r#"
+[engine]
+sample_rate = 48000
+buffer_size = 256
+
+[[devices]]
+name = "missing"
+device = "Missing Device"
+
+[[devices]]
+name = "out"
+device = "BlackHole 2ch"
+
+[[routes]]
+from = "missing"
+to = "out"
+from_channels = [3, 4]
+to_channels = [1, 2]
+"#,
+        )
+        .unwrap();
+        let plan = validate_config(config).unwrap();
+
+        assert_eq!(configured_channel_counts(&plan, "missing"), (2, 0));
+    }
 }

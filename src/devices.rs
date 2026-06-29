@@ -395,17 +395,17 @@ pub fn resolve_devices(
         }
 
         // Probe physical channel counts for the unused direction (display only, never fails).
-        if max_in_ch == 0 {
-            if let Some(d) = input_devices.iter().find(|d| &d.to_string() == dev_name) {
-                max_in_ch = max_channels(d, true).unwrap_or(0);
-                pref_in_ch = preferred_channels(d, true);
-            }
+        if max_in_ch == 0
+            && let Some(d) = input_devices.iter().find(|d| &d.to_string() == dev_name)
+        {
+            max_in_ch = max_channels(d, true).unwrap_or(0);
+            pref_in_ch = preferred_channels(d, true);
         }
-        if max_out_ch == 0 {
-            if let Some(d) = output_devices.iter().find(|d| &d.to_string() == dev_name) {
-                max_out_ch = max_channels(d, false).unwrap_or(0);
-                pref_out_ch = preferred_channels(d, false);
-            }
+        if max_out_ch == 0
+            && let Some(d) = output_devices.iter().find(|d| &d.to_string() == dev_name)
+        {
+            max_out_ch = max_channels(d, false).unwrap_or(0);
+            pref_out_ch = preferred_channels(d, false);
         }
 
         let device = cpal_input_device

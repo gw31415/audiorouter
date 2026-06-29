@@ -2,11 +2,11 @@ fn main() {
     // If APP_VERSION is explicitly set (e.g. by the release workflow), use it
     // directly.  This avoids a false "dirty" flag caused by the Cargo.toml
     // version-bump that the release workflow performs via set-version.sh.
-    if let Ok(v) = std::env::var("APP_VERSION") {
-        if !v.is_empty() {
-            println!("cargo:rustc-env=APP_VERSION={v}");
-            return;
-        }
+    if let Ok(v) = std::env::var("APP_VERSION")
+        && !v.is_empty()
+    {
+        println!("cargo:rustc-env=APP_VERSION={v}");
+        return;
     }
 
     let pkg_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();

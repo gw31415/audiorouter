@@ -111,7 +111,7 @@ fn run_completions(
 
     let mut cmd = Cli::command().version(APP_VERSION);
 
-    if output.map_or(true, |p| p == std::path::Path::new("-")) {
+    if output.is_none_or(|p| p == std::path::Path::new("-")) {
         // stdout: wrap to silently swallow BrokenPipe so `| head` etc. don't panic.
         struct BrokenPipeSink<W: Write>(W);
         impl<W: Write> Write for BrokenPipeSink<W> {
