@@ -87,10 +87,6 @@ pub fn validate_config(mut config: Config) -> Result<ValidatedConfig, Vec<String
     }
 
     // --- routes ---
-    if config.routes.is_empty() {
-        errors.push("config must define at least one route".to_string());
-    }
-
     for (i, route) in config.routes.iter().enumerate() {
         validate_route(i, route, &name_map, &mut errors);
     }
