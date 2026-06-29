@@ -974,20 +974,20 @@ fn draw_edge(
         f.buffer_mut()
             .set_string(dst_x, y2, &dst_channels, dst_ch_style);
 
-        // Gain shares the lower row with one of the channel labels.
-        let gain_row = y1.min(y2);
-        let (gain_x, gain_ok) = if gain_row == y1 {
-            // Gain after src on source segment (must end before the bend).
-            let gx = src_x.saturating_add(src_w + 1);
-            (gx, gx.saturating_add(gain_w) <= mid_x)
-        } else {
-            // Gain before dst on target segment (must start after the bend).
-            let gx = dst_x.saturating_sub(gain_w + 1);
-            (gx, gx > mid_x.saturating_add(1))
-        };
-        if gain_ok {
+        // Try to place gain on the source segment first (after src_ch, before corner).
+        // Fall back to the destination segment (after corner, before dst_ch).
+        let gain_x_src = src_x.saturating_add(src_w + 1);
+        let gain_fits_src = gain_x_src.saturating_add(gain_w) <= mid_x;
+
+        let gain_x_dst = mid_x.saturating_add(2); // one cell after corner
+        let gain_fits_dst = gain_x_dst.saturating_add(gain_w) <= dst_x;
+
+        if gain_fits_src {
             f.buffer_mut()
-                .set_string(gain_x, gain_row, &gain_text, gain_style);
+                .set_string(gain_x_src, y1, &gain_text, gain_style);
+        } else if gain_fits_dst {
+            f.buffer_mut()
+                .set_string(gain_x_dst, y2, &gain_text, gain_style);
         }
     }
 }
