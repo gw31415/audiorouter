@@ -114,6 +114,7 @@ input[type="number"]::-webkit-outer-spin-button {
  */
 .react-flow__edge-interaction {
   stroke: var(--color-foreground);
+  cursor: pointer;
 }
 
 /* ── Lock state cursor overrides ─────────────────────── */

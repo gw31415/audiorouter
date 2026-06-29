@@ -367,7 +367,7 @@ function GainLabel({
 
   return (
     <div
-      className="nodrag nopan absolute cursor-pointer"
+      className="nodrag nopan absolute cursor-ns-resize"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
