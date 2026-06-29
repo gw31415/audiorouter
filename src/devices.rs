@@ -16,7 +16,7 @@ use crate::validate::ValidatedConfig;
 /// # Errors
 ///
 /// Returns an error if the CPAL host or device enumeration fails.
-pub fn print_devices() -> anyhow::Result<()> {
+pub fn print_devices(show_rates: bool) -> anyhow::Result<()> {
     let host = cpal::default_host();
 
     let default_input_name = host.default_input_device().map(|d| d.to_string());
@@ -83,7 +83,7 @@ pub fn print_devices() -> anyhow::Result<()> {
                 .unwrap_or_else(|| "no supported configs".to_string());
             ui::device_entry_unavailable(name, marker, &err);
         } else {
-            ui::device_entry(name, in_ch, out_ch, Some(&rates), marker);
+            ui::device_entry(name, in_ch, out_ch, show_rates.then_some(rates.as_slice()), marker);
         }
     }
 
@@ -97,12 +97,32 @@ fn configs_to_rate_strings(configs: &[SupportedStreamConfigRange]) -> Vec<String
             let min = c.min_sample_rate();
             let max = c.max_sample_rate();
             if min == max {
-                format!("{} Hz", min)
+                format_hz(min)
             } else {
-                format!("{}–{} Hz", min, max)
+                format!("{}–{}", format_hz(min), format_hz(max))
             }
         })
         .collect()
+}
+
+fn format_hz(rate: u32) -> String {
+    if rate >= 1_000_000 {
+        let v = rate as f64 / 1_000_000.0;
+        if v.fract() == 0.0 {
+            format!("{} MHz", v as u32)
+        } else {
+            format!("{:.1} MHz", v)
+        }
+    } else if rate >= 1_000 {
+        let v = rate as f64 / 1_000.0;
+        if v.fract() == 0.0 {
+            format!("{} kHz", v as u32)
+        } else {
+            format!("{:.1} kHz", v)
+        }
+    } else {
+        format!("{} Hz", rate)
+    }
 }
 
 /// Information about a resolved audio device.

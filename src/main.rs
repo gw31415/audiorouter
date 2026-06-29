@@ -90,7 +90,7 @@ fn is_interactive_run(command: &Command) -> bool {
 fn dispatch(cli: &Cli, command: Command, interactive: bool) -> Result<(), AppError> {
     match command {
         Command::ConfigPath => run_print_config_path(cli),
-        Command::ListDevices => run_list_devices(),
+        Command::ListDevices => run_list_devices(cli),
         Command::Check => run_check(cli),
         Command::Run => run_run(cli, interactive),
         Command::Completions { shell, output } => run_completions(shell, output.as_deref()),
@@ -170,8 +170,8 @@ fn run_print_config_path(cli: &Cli) -> Result<(), AppError> {
     Ok(())
 }
 
-fn run_list_devices() -> Result<(), AppError> {
-    devices::print_devices().map_err(|e| AppError::runtime(format!("{e}")))
+fn run_list_devices(cli: &Cli) -> Result<(), AppError> {
+    devices::print_devices(cli.verbose > 0).map_err(|e| AppError::runtime(format!("{e}")))
 }
 
 fn run_check(cli: &Cli) -> Result<(), AppError> {

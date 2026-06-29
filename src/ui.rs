@@ -51,14 +51,14 @@ pub fn device_entry(
         (None, Some(o)) => format!("{}out", o),
         (None, None) => String::new(),
     };
-    let mut line = format!("  {}  {}", name.bold(), ch_str.magenta());
+    let mut line = format!("  {} {}", name.bold(), ch_str.magenta());
     if let Some(rates) = rates
         && !rates.is_empty()
     {
-        line.push_str(&format!("  {}", rates.join(", ").dimmed()));
+        line.push_str(&format!(" {}", rates.join(", ").dimmed()));
     }
     if let Some(m) = marker {
-        line.push_str(&format!("  {}", m.green().bold()));
+        line.push_str(&format!(" {}", format!("({m})").green().bold()));
     }
     println!("{line}");
 }
