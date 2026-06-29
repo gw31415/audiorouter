@@ -654,7 +654,7 @@ export default function App() {
           <button
             type="button"
             onClick={handleReload}
-            className={`h-7 rounded-md border px-2.5 text-xs transition ${
+            className={`flex h-7 w-24 items-center justify-center gap-1.5 rounded-md border text-xs transition ${
               configFileChanged
                 ? "animate-pulse border-[var(--color-ar-border)] bg-[color-mix(in_oklch,var(--color-ar-border)_15%,transparent)] font-semibold text-[var(--color-ar-border)] hover:bg-[color-mix(in_oklch,var(--color-ar-border)_25%,transparent)]"
                 : "border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:bg-[var(--color-muted)]"
@@ -665,7 +665,29 @@ export default function App() {
                 : "設定ファイルから再読み込み"
             }
           >
-            {configFileChanged ? "⟳ 再読込" : "再読込"}
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 11 11"
+              fill="none"
+              className={configFileChanged ? "animate-spin" : ""}
+            >
+              <path
+                d="M9.5 5.5A4 4 0 1 1 8 2.2"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <polyline
+                points="7,0.5 9.5,2 7.5,4"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+              />
+            </svg>
+            <span>再読込</span>
           </button>
 
           <button
@@ -679,22 +701,74 @@ export default function App() {
                   ? "エラーがあるため保存できません"
                   : "設定ファイルへ保存"
             }
-            className="h-7 rounded-md px-3 text-xs font-medium transition"
+            className="flex h-7 w-24 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition disabled:cursor-not-allowed"
             style={
-              saveDisabled
+              saveState === "error"
                 ? {
-                    background: "var(--color-muted)",
-                    color: "var(--color-muted-foreground)",
-                    cursor: "not-allowed",
-                    opacity: 0.5,
+                    background: "color-mix(in oklch, var(--color-destructive) 15%, transparent)",
+                    color: "var(--color-destructive)",
+                    border: "1px solid var(--color-destructive)",
                   }
-                : {
-                    background: "var(--color-primary)",
-                    color: "var(--color-primary-foreground)",
-                  }
+                : saveDisabled
+                  ? {
+                      background: "var(--color-muted)",
+                      color: "var(--color-muted-foreground)",
+                      opacity: 0.5,
+                    }
+                  : {
+                      background: "var(--color-primary)",
+                      color: "var(--color-primary-foreground)",
+                    }
             }
           >
-            {saveState === "saving" ? "…" : !isDirty ? "保存済" : "保存"}
+            {saveState === "saving" ? (
+              <svg className="animate-spin" width="11" height="11" viewBox="0 0 11 11" fill="none">
+                <circle
+                  cx="5.5"
+                  cy="5.5"
+                  r="4"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeDasharray="12 14"
+                  strokeLinecap="round"
+                />
+              </svg>
+            ) : saveState === "error" ? (
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                <line x1="2" y1="2" x2="9" y2="9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                <line x1="9" y1="2" x2="2" y2="9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            ) : !isDirty ? (
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                <polyline
+                  points="1.5,5.5 4,8 9.5,2.5"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                <path
+                  d="M5.5 1.5v6M2.5 5l3 3 3-3"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <line x1="1.5" y1="9.5" x2="9.5" y2="9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            )}
+            <span>
+              {saveState === "saving"
+                ? "保存中"
+                : saveState === "error"
+                  ? "エラー"
+                  : !isDirty
+                    ? "保存済"
+                    : "保存"}
+            </span>
           </button>
         </div>
       </header>

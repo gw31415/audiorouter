@@ -155,26 +155,14 @@ export function SidePanel({
             <span className="mb-1.5 block text-xs font-medium text-[var(--color-muted-foreground)]">
               リミッター（出力時）
             </span>
-            <button
-              type="button"
+            <TogglePill
+              on={data.limiter}
+              onLabel="有効"
+              offLabel="無効"
+              activeColor="var(--color-ar-gain)"
               disabled={readOnly}
-              onClick={() => onUpdateDevice(selection.id, { limiter: !data.limiter })}
-              className="rounded-md border px-3 py-1.5 text-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
-              style={
-                data.limiter
-                  ? {
-                      borderColor: "var(--color-ar-gain)",
-                      background: "color-mix(in oklch, var(--color-ar-gain) 15%, transparent)",
-                      color: "var(--color-ar-gain)",
-                    }
-                  : {
-                      borderColor: "var(--color-border)",
-                      color: "var(--color-muted-foreground)",
-                    }
-              }
-            >
-              {data.limiter ? "🧱 有効" : "無効"}
-            </button>
+              onChange={() => onUpdateDevice(selection.id, { limiter: !data.limiter })}
+            />
           </div>
         </div>
 
@@ -394,26 +382,14 @@ export function SidePanel({
           <span className="mb-1.5 block text-xs font-medium text-[var(--color-muted-foreground)]">
             ミュート
           </span>
-          <button
-            type="button"
+          <TogglePill
+            on={data.mute}
+            onLabel="ミュート中"
+            offLabel="オフ"
+            activeColor="var(--color-ar-clip)"
             disabled={readOnly}
-            onClick={() => onUpdateRoute(selection.id, { mute: !data.mute })}
-            className="rounded-md border px-3 py-1.5 text-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
-            style={
-              data.mute
-                ? {
-                    borderColor: "var(--color-ar-disabled)",
-                    background: "color-mix(in oklch, var(--color-ar-disabled) 20%, transparent)",
-                    color: "var(--color-muted-foreground)",
-                  }
-                : {
-                    borderColor: "var(--color-border)",
-                    color: "var(--color-muted-foreground)",
-                  }
-            }
-          >
-            {data.mute ? "✕ ミュート中" : "ミュート"}
-          </button>
+            onChange={() => onUpdateRoute(selection.id, { mute: !data.mute })}
+          />
         </div>
       </div>
 
@@ -428,6 +404,53 @@ export function SidePanel({
         </button>
       </div>
     </div>
+  );
+}
+
+function TogglePill({
+  on,
+  onLabel,
+  offLabel,
+  activeColor,
+  disabled,
+  onChange,
+}: {
+  on: boolean;
+  onLabel: string;
+  offLabel: string;
+  activeColor: string;
+  disabled?: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={disabled}
+      onClick={onChange}
+      className="flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-sm transition duration-150 disabled:cursor-not-allowed disabled:opacity-40"
+      style={{
+        borderColor: on ? activeColor : "var(--color-border)",
+        background: on
+          ? `color-mix(in oklch, ${activeColor} 12%, transparent)`
+          : "transparent",
+        color: on ? activeColor : "var(--color-muted-foreground)",
+      }}
+    >
+      {/* Track */}
+      <div
+        className="relative h-4 w-7 shrink-0 rounded-full transition-colors duration-150"
+        style={{ background: on ? activeColor : "var(--color-muted)" }}
+      >
+        {/* Thumb */}
+        <div
+          className="absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-150"
+          style={{ transform: on ? "translateX(12px)" : "translateX(2px)" }}
+        />
+      </div>
+      <span className="text-xs font-medium">{on ? onLabel : offLabel}</span>
+    </button>
   );
 }
 
