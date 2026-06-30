@@ -53,7 +53,13 @@ body,
   height: 100%;
 }
 
+html {
+  /* Viewport never scrolls */
+  overflow: hidden;
+}
+
 body {
+  /* Inherit the viewport lock from <html>; content fills the viewport exactly */
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family:
