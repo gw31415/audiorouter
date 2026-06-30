@@ -55,6 +55,22 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: pnpm
+          cache-dependency-path: crates/audiorouter-dashboard/dashboard/pnpm-lock.yaml
+
+      - name: Install dashboard deps
+        run: pnpm install --frozen-lockfile
+        working-directory: crates/audiorouter-dashboard/dashboard
+
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
 
@@ -117,14 +133,16 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          PUBLISHED="$(curl -fsS -A "audiorouter release workflow" \
-            "https://crates.io/api/v1/crates/audiorouter/${VERSION}" \
-            && echo yes || echo no)"
-          if [ "${PUBLISHED}" = "yes" ]; then
-            echo "✓ audiorouter ${VERSION} is already published; skipping"
-          else
-            cargo publish --no-verify --allow-dirty
-          fi
+          # publish in dependency order: core -> dashboard -> main
+          for crate in audiorouter-core audiorouter-dashboard audiorouter; do
+            if curl -fsS -A "audiorouter release workflow" \
+                "https://crates.io/api/v1/crates/${crate}/${VERSION}" >/dev/null 2>&1; then
+              echo "✓ ${crate} ${VERSION} already published; skipping"
+              continue
+            fi
+            echo "→ publishing ${crate} ${VERSION}"
+            cargo publish --no-verify --allow-dirty -p "${crate}"
+          done
 
   # ── Create GitHub Release with all binary assets ────────────────────
   github-release:
