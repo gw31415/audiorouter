@@ -54,6 +54,26 @@ pub enum Command {
     /// Print the resolved configuration path, then exit.
     ConfigPath,
 
+    /// Launch the web dashboard (HTTP/SSE UI) in the default browser.
+    ///
+    /// By default the dashboard binds to localhost (127.0.0.1) on port 7822.
+    Dashboard {
+        /// Expose the dashboard on the local network (bind 0.0.0.0).
+        ///
+        /// Off by default, which keeps the dashboard reachable only from this
+        /// machine. Pass `--host` to share it with other devices on the LAN.
+        #[arg(long)]
+        host: bool,
+
+        /// Port to bind the dashboard server on.
+        #[arg(long, short, default_value_t = 7822)]
+        port: u16,
+
+        /// Do not open the dashboard in the default browser.
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Generate a shell completion script.
     ///
     /// Writes to stdout by default; use --output to write to a file instead.
@@ -108,6 +128,52 @@ mod tests {
     fn config_path_subcommand() {
         let cli = Cli::parse_from(["audiorouter", "config-path"]);
         assert_eq!(cli.command_or_default(), Command::ConfigPath);
+    }
+
+    #[test]
+    fn dashboard_subcommand_defaults() {
+        let cli = Cli::parse_from(["audiorouter", "dashboard"]);
+        assert_eq!(
+            cli.command_or_default(),
+            Command::Dashboard {
+                host: false,
+                port: 7822,
+                no_open: false,
+            }
+        );
+    }
+
+    #[test]
+    fn dashboard_no_open_flag() {
+        let cli = Cli::parse_from(["audiorouter", "dashboard", "--no-open"]);
+        assert_eq!(
+            cli.command_or_default(),
+            Command::Dashboard {
+                host: false,
+                port: 7822,
+                no_open: true,
+            }
+        );
+    }
+
+    #[test]
+    fn dashboard_host_and_port_flags() {
+        let cli = Cli::parse_from([
+            "audiorouter",
+            "dashboard",
+            "--host",
+            "--port",
+            "9000",
+            "--no-open",
+        ]);
+        assert_eq!(
+            cli.command_or_default(),
+            Command::Dashboard {
+                host: true,
+                port: 9000,
+                no_open: true,
+            }
+        );
     }
 
     // --- global flags work before and after the subcommand ---

@@ -20,9 +20,9 @@ use audiorouter_core::{
 };
 use axum::body::Body;
 use axum::extract::{Request, State};
+use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::HeaderValue;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -35,8 +35,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 // Embedded frontend produced by `pnpm build` (see build.rs). Lives in OUT_DIR
 // (cargo-managed) so it survives build.rs cache skips between cargo runs.
-static DIST_DIR: Dir<'static> =
-    include_dir!("$OUT_DIR/dist");
+static DIST_DIR: Dir<'static> = include_dir!("$OUT_DIR/dist");
 
 #[derive(Clone)]
 pub struct DashboardState {
@@ -216,6 +215,16 @@ impl DashboardEvent {
             Self::Log { .. } => "log",
         }
     }
+}
+
+/// Serve the embedded frontend + API on an already-bound listener.
+///
+/// Convenience wrapper around [`dashboard_router`] so callers (e.g. the
+/// `audiorouter dashboard` subcommand) don't need to depend on `axum` directly.
+pub async fn serve(listener: tokio::net::TcpListener, state: DashboardState) -> anyhow::Result<()> {
+    let router = dashboard_router(state);
+    axum::serve(listener, router).await?;
+    Ok(())
 }
 
 pub fn api_router(state: DashboardState) -> Router {

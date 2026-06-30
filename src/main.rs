@@ -92,6 +92,11 @@ async fn dispatch(cli: &Cli, command: Command, interactive: bool) -> Result<(), 
         Command::ListDevices => run_list_devices(cli),
         Command::Check => run_check(cli),
         Command::Run => run_run(cli, interactive).await,
+        Command::Dashboard {
+            host,
+            port,
+            no_open,
+        } => run_dashboard(cli, host, port, no_open).await,
         Command::Completions { shell, output } => run_completions(shell, output.as_deref()),
     }
 }
@@ -339,5 +344,46 @@ async fn run_headless(handle: EngineHandle) -> Result<(), AppError> {
     }
 
     tracing::info!("audiorouter stopped");
+    Ok(())
+}
+
+async fn run_dashboard(cli: &Cli, host: bool, port: u16, no_open: bool) -> Result<(), AppError> {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    let config_path = resolve_config_path(cli.config.as_deref())
+        .map_err(|e| AppError::runtime(format!("cannot resolve config path: {e}")))?;
+
+    // `--host` flips from localhost-only to LAN-exposed. Binding 0.0.0.0 is an
+    // explicit opt-in so the dashboard isn't accidentally shared on the network.
+    let ip = if host {
+        Ipv4Addr::UNSPECIFIED
+    } else {
+        Ipv4Addr::LOCALHOST
+    };
+    let addr = SocketAddr::new(IpAddr::V4(ip), port);
+
+    let state = audiorouter_dashboard::DashboardState::new(&config_path);
+    let _device_watcher = state.spawn_device_watcher();
+    let _config_watcher = state.spawn_config_watcher();
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| AppError::runtime(format!("cannot bind {addr}: {e}")))?;
+    let local_addr = listener
+        .local_addr()
+        .map_err(|e| AppError::runtime(format!("cannot resolve bound addr: {e}")))?;
+
+    let url = format!("http://{local_addr}");
+    ui::success(format!("audiorouter-dashboard listening on {url}"));
+
+    if !no_open {
+        if let Err(e) = open::that(&url) {
+            tracing::warn!("failed to open browser: {e}");
+        }
+    }
+
+    audiorouter_dashboard::serve(listener, state)
+        .await
+        .map_err(|e| AppError::runtime(format!("dashboard server error: {e}")))?;
     Ok(())
 }

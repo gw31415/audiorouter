@@ -11,6 +11,7 @@ categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
 audiorouter-core = { path = "crates/audiorouter-core" }
+audiorouter-dashboard = { path = "crates/audiorouter-dashboard" }
 anyhow = ">=1,<2"
 clap = { version = ">=4,<5", features = ["derive"] }
 clap_complete = ">=4,<5"
@@ -19,12 +20,13 @@ cpal = ">=0.18,<0.19"
 ctrlc = ">=3,<4"
 dirs = ">=6,<7"
 notify = ">=8,<9"
+open = ">=5,<6"
 ringbuf = ">=0.5,<0.6"
 serde = { version = ">=1,<2", features = ["derive"] }
 toml = ">=1.1,<1.2"
 ratatui = ">=0.30,<0.31"
 crossterm = ">=0.29,<0.30"
-tokio = { version = ">=1,<2", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = ">=1,<2", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tracing = ">=0.1,<0.2"
 tracing-subscriber = { version = ">=0.3,<0.4", features = ["env-filter"] }
 unicode-width = ">=0.2,<0.3"

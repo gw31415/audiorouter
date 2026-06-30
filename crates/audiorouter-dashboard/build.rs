@@ -36,7 +36,16 @@ fn main() {
     // Rerun this script only when frontend inputs change (cargo watches a
     // directory path recursively), so editing Rust does not trigger pnpm.
     println!("cargo:rerun-if-changed={}/src", frontend_dir.display());
-    println!("cargo:rerun-if-changed={}/index.html", frontend_dir.display());
-    println!("cargo:rerun-if-changed={}/package.json", frontend_dir.display());
-    println!("cargo:rerun-if-changed={}/vite.config.ts", frontend_dir.display());
+    println!(
+        "cargo:rerun-if-changed={}/index.html",
+        frontend_dir.display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}/package.json",
+        frontend_dir.display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}/vite.config.ts",
+        frontend_dir.display()
+    );
 }
