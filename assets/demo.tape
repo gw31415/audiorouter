@@ -1,4 +1,4 @@
-Output demo.gif
+Output assets/demo.gif
 
 Set Shell "bash"
 Set FontSize 24
@@ -9,16 +9,16 @@ Set Theme "Catppuccin Mocha"
 Set Padding 30
 Set Framerate 30
 
-# Launch audiorouter without showing the command
+# Launch audiorouter without showing the command.
 Hide
-Type "audiorouter -c config.toml" Enter
+Type "./target/debug/audiorouter -c assets/config.toml" Enter
 Sleep 3s
 Show
 
-# Record the running TUI
-Sleep 6s
+# Record only the running TUI.
+Sleep 8s
 
-# Quit (hidden so the prompt doesn't appear in the GIF)
+# Quit without showing the shell prompt.
 Hide
 Ctrl+C
 Sleep 1s
