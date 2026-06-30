@@ -23,13 +23,20 @@ import { SidePanel } from "./components/SidePanel";
 import type { Selection } from "./components/SidePanel";
 import { TomlPreview } from "./components/TomlPreview";
 import { ValidationPanel } from "./components/ValidationPanel";
-import { api, type AudioDevice, type ConfigStatusResponse } from "./lib/api";
+import {
+  api,
+  type AudioDevice,
+  type ConfigStatusResponse,
+  type ValidationError,
+  type ValidationWarning,
+} from "./lib/api";
 import { cascadeHidden, disconnectedDeviceNames } from "./lib/graph";
 import type { AudiorouterConfig, DeviceConfig, RouteConfig } from "./types";
-import { createEmptyConfig } from "./types";
+import { createEmptyConfig, effectiveName } from "./types";
 
 type LoadState = "loading" | "loaded" | "error";
 type BottomTab = "validation" | "toml" | "log";
+type ValidationIssue = ValidationError | ValidationWarning;
 
 function configFingerprint(config: AudiorouterConfig): string {
   return JSON.stringify(config);
@@ -44,6 +51,20 @@ function emptyConfigStatus(): ConfigStatusResponse {
     disabledRouteIndices: [],
     missingDeviceAliases: [],
   };
+}
+
+function indexedPath(text: string, section: "devices" | "routes"): number | null {
+  const singular = section === "devices" ? "device" : "route";
+  const match = text.match(new RegExp(`\\b(?:${section}|${singular})\\[(\\d+)\\]`));
+  if (!match) return null;
+  const index = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(index) ? index : null;
+}
+
+function quotedValues(text: string): string[] {
+  return Array.from(text.matchAll(/["“”]([^"“”]+)["“”]/g), (match) => match[1] ?? "").filter(
+    Boolean,
+  );
 }
 
 export default function App() {
@@ -388,6 +409,74 @@ export default function App() {
   const handleEdgeClick = useCallback((edgeId: string) => {
     setSelection({ kind: "edge", id: edgeId });
   }, []);
+
+  const handleValidationIssueClick = useCallback(
+    (issue: ValidationIssue) => {
+      // The API currently leaves `path` empty for some diagnostics and embeds
+      // e.g. `route[0].from` in the message. Prefer `path` when present, but
+      // search both so the UI keeps working after backend paths are filled in.
+      const text = `${issue.path} ${issue.message}`;
+
+      const routeIndex = indexedPath(text, "routes");
+      if (routeIndex !== null) {
+        const edge = edges[routeIndex];
+        if (edge) {
+          setSelection({ kind: "edge", id: edge.id });
+          return;
+        }
+      }
+
+      const deviceIndex = indexedPath(text, "devices");
+      if (deviceIndex !== null) {
+        const device = currentConfig.devices[deviceIndex];
+        if (device) {
+          const alias = effectiveName(device);
+          const node = nodes.find((n) => {
+            const data = n.data as DeviceNodeData;
+            return (data.name || data.device) === alias;
+          });
+          if (node) {
+            setSelection({ kind: "device", id: node.id });
+            return;
+          }
+        }
+      }
+
+      for (const value of quotedValues(text)) {
+        const node = nodes.find((n) => {
+          const data = n.data as DeviceNodeData;
+          return (data.name || data.device) === value || data.device === value;
+        });
+        if (node) {
+          setSelection({ kind: "device", id: node.id });
+          return;
+        }
+      }
+
+      const matchingRouteIndex = currentConfig.routes.findIndex(
+        (route) => text.includes(route.from) && text.includes(route.to),
+      );
+      if (matchingRouteIndex >= 0) {
+        const edge = edges[matchingRouteIndex];
+        if (edge) {
+          setSelection({ kind: "edge", id: edge.id });
+          return;
+        }
+      }
+
+      if (/\broute\(s\) disabled\b/.test(text)) {
+        const firstDisabledRouteIndex = disabledRouteIndices.values().next().value as
+          | number
+          | undefined;
+        const edge =
+          firstDisabledRouteIndex === undefined ? undefined : edges[firstDisabledRouteIndex];
+        if (edge) {
+          setSelection({ kind: "edge", id: edge.id });
+        }
+      }
+    },
+    [currentConfig.devices, currentConfig.routes, disabledRouteIndices, edges, nodes],
+  );
 
   const handlePaneClick = useCallback(() => {
     setSelection({ kind: "none" });
@@ -916,7 +1005,11 @@ export default function App() {
           {activeBottomTab && (
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {activeBottomTab === "validation" ? (
-                <ValidationPanel errors={allErrors} warnings={clientWarnings} />
+                <ValidationPanel
+                  errors={allErrors}
+                  warnings={clientWarnings}
+                  onIssueClick={handleValidationIssueClick}
+                />
               ) : activeBottomTab === "toml" ? (
                 <TomlPreview toml={tomlPreview} />
               ) : (

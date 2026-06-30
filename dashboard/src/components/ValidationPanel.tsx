@@ -1,11 +1,14 @@
 import type { ValidationError, ValidationWarning } from "../lib/api";
 
+type ValidationIssue = ValidationError | ValidationWarning;
+
 interface Props {
   errors: ValidationError[];
   warnings: ValidationWarning[];
+  onIssueClick?: (issue: ValidationIssue) => void;
 }
 
-export function ValidationPanel({ errors, warnings }: Props) {
+export function ValidationPanel({ errors, warnings, onIssueClick }: Props) {
   return (
     <div className="h-full">
       {errors.length === 0 && warnings.length === 0 ? (
@@ -16,66 +19,74 @@ export function ValidationPanel({ errors, warnings }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
-          {/* Errors */}
           {errors.length > 0 && (
-            <div>
-              <p
-                className="mb-1.5 text-xs font-semibold"
-                style={{ color: "var(--color-destructive)" }}
-              >
-                Errors ({errors.length})
-              </p>
-              <ul className="space-y-1">
-                {errors.map((e, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 rounded-md p-2 text-xs"
-                    style={{
-                      background: "color-mix(in oklch, var(--color-destructive) 10%, transparent)",
-                    }}
-                  >
-                    <span className="shrink-0" style={{ color: "var(--color-destructive)" }}>
-                      ✕
-                    </span>
-                    <code className="shrink-0 font-mono text-[var(--color-muted-foreground)]">
-                      {e.path}
-                    </code>
-                    <span className="text-[var(--color-foreground)]">{e.message}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <IssueGroup
+              title={`Errors (${errors.length})`}
+              toneColor="var(--color-destructive)"
+              icon="✕"
+              issues={errors}
+              onIssueClick={onIssueClick}
+            />
           )}
 
-          {/* Warnings */}
           {warnings.length > 0 && (
-            <div>
-              <p className="mb-1.5 text-xs font-semibold" style={{ color: "var(--color-ar-gain)" }}>
-                Warnings ({warnings.length})
-              </p>
-              <ul className="space-y-1">
-                {warnings.map((w, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 rounded-md p-2 text-xs"
-                    style={{
-                      background: "color-mix(in oklch, var(--color-ar-gain) 10%, transparent)",
-                    }}
-                  >
-                    <span className="shrink-0" style={{ color: "var(--color-ar-gain)" }}>
-                      ⚠
-                    </span>
-                    <code className="shrink-0 font-mono text-[var(--color-muted-foreground)]">
-                      {w.path}
-                    </code>
-                    <span className="text-[var(--color-foreground)]">{w.message}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <IssueGroup
+              title={`Warnings (${warnings.length})`}
+              toneColor="var(--color-ar-gain)"
+              icon="⚠"
+              issues={warnings}
+              onIssueClick={onIssueClick}
+            />
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function IssueGroup({
+  title,
+  toneColor,
+  icon,
+  issues,
+  onIssueClick,
+}: {
+  title: string;
+  toneColor: string;
+  icon: string;
+  issues: ValidationIssue[];
+  onIssueClick?: (issue: ValidationIssue) => void;
+}) {
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold" style={{ color: toneColor }}>
+        {title}
+      </p>
+      <ul className="space-y-1">
+        {issues.map((issue, i) => (
+          <li key={`${issue.path}:${issue.message}:${i}`}>
+            <button
+              type="button"
+              onClick={() => onIssueClick?.(issue)}
+              className="flex w-full cursor-pointer items-start gap-2 rounded-md p-2 text-left text-xs transition hover:bg-[var(--color-muted)]"
+              style={{
+                background: `color-mix(in oklch, ${toneColor} 10%, transparent)`,
+              }}
+              title="クリックして該当するノードまたはパスを選択"
+            >
+              <span className="shrink-0" style={{ color: toneColor }}>
+                {icon}
+              </span>
+              {issue.path && (
+                <code className="shrink-0 font-mono text-[var(--color-muted-foreground)]">
+                  {issue.path}
+                </code>
+              )}
+              <span className="text-[var(--color-foreground)]">{issue.message}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
