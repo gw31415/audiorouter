@@ -33,10 +33,10 @@ use serde::Serialize;
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 
-// Embedded frontend produced by `pnpm build` (see build.rs). Embedding at
-// compile time removes any runtime dependency on a dist directory or CWD.
+// Embedded frontend produced by `pnpm build` (see build.rs). Lives in OUT_DIR
+// (cargo-managed) so it survives build.rs cache skips between cargo runs.
 static DIST_DIR: Dir<'static> =
-    include_dir!("$CARGO_MANIFEST_DIR/dashboard/dist");
+    include_dir!("$OUT_DIR/dist");
 
 #[derive(Clone)]
 pub struct DashboardState {

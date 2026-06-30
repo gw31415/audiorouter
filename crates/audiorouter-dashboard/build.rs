@@ -1,5 +1,6 @@
 // Runs `pnpm build` in the frontend dashboard dir before the crate is compiled,
-// so `include_dir!` in lib.rs can embed a fresh `dashboard/dist`.
+// outputting to `$OUT_DIR/dist` so `include_dir!` in lib.rs can embed it.
+// Using OUT_DIR (cargo-managed) means the output survives build.rs cache skips.
 fn main() {
     // ponytail: escape hatch for pure-Rust dev iterations (Rust edits don't need
     // a frontend rebuild). Set SKIP_DASHBOARD_BUILD=1 and reuse the last dist.
@@ -8,10 +9,13 @@ fn main() {
     }
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let out_dir = std::env::var("OUT_DIR").unwrap();
     let frontend_dir = std::path::Path::new(&manifest_dir).join("dashboard");
+    let dist_dir = format!("{out_dir}/dist");
 
     let status = std::process::Command::new("pnpm")
         .arg("build")
+        .env("AUDIOROUTER_DIST_DIR", &dist_dir)
         .current_dir(&frontend_dir)
         .status()
         .unwrap_or_else(|e| {
