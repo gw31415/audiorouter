@@ -1,8 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use audiorouter_dashboard_api::{DashboardState, api_router};
-use axum::Router;
+use audiorouter_dashboard::{DashboardState, dashboard_router};
 
 const DEFAULT_ADDR: &str = "127.0.0.1:7822";
 
@@ -15,8 +14,8 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(options.addr).await?;
     let local_addr = listener.local_addr()?;
 
-    println!("audiorouter-dashboard-api listening on http://{local_addr}");
-    let router = Router::new().nest("/api", api_router(state));
+    println!("audiorouter-dashboard listening on http://{local_addr}");
+    let router = dashboard_router(state);
     axum::serve(listener, router).await?;
     Ok(())
 }
@@ -28,7 +27,7 @@ struct Options {
 
 impl Options {
     fn parse() -> anyhow::Result<Self> {
-        let mut addr = std::env::var("AUDIOROUTER_DASHBOARD_API_ADDR")
+        let mut addr = std::env::var("AUDIOROUTER_DASHBOARD_ADDR")
             .unwrap_or_else(|_| DEFAULT_ADDR.to_string())
             .parse()?;
         let mut config_path = match std::env::var_os("AUDIOROUTER_CONFIG") {
@@ -65,6 +64,6 @@ impl Options {
 
 fn print_help() {
     println!(
-        "audiorouter-dashboard-api\n\nUSAGE:\n    cargo run -p audiorouter-dashboard-api -- [--addr HOST:PORT] [--config PATH]\n\nENV:\n    AUDIOROUTER_DASHBOARD_API_ADDR  default: {DEFAULT_ADDR}\n    AUDIOROUTER_CONFIG              default: audiorouter platform config path"
+        "audiorouter-dashboard (serves embedded frontend + API)\n\nUSAGE:\n    cargo run --bin audiorouter-dashboard -- [--addr HOST:PORT] [--config PATH]\n\nENV:\n    AUDIOROUTER_DASHBOARD_ADDR   default: {DEFAULT_ADDR}\n    AUDIOROUTER_CONFIG           default: audiorouter platform config path\n    SKIP_DASHBOARD_BUILD=1       skip the `pnpm build` step in build.rs"
     );
 }

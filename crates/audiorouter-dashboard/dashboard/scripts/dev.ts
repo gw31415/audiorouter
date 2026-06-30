@@ -4,13 +4,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dashboardDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const workspaceDir = resolve(dashboardDir, "..");
-const apiAddr = process.env.AUDIOROUTER_DASHBOARD_API_ADDR ?? "127.0.0.1:7822";
+const workspaceDir = resolve(dashboardDir, "../../..");
+const apiAddr = process.env.AUDIOROUTER_DASHBOARD_ADDR ?? "127.0.0.1:7822";
 const apiUrl = `http://${apiAddr}`;
 
 const cargoEnv: NodeJS.ProcessEnv = {
   ...process.env,
-  AUDIOROUTER_DASHBOARD_API_ADDR: apiAddr,
+  AUDIOROUTER_DASHBOARD_ADDR: apiAddr,
 };
 const viteEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -53,7 +53,7 @@ console.log(`Starting audiorouter-dashboard-api at ${apiUrl}`);
 run(
   "audiorouter-dashboard-api",
   "cargo",
-  ["run", "-p", "audiorouter-dashboard-api", "--", "--addr", apiAddr],
+  ["run", "-p", "audiorouter-dashboard", "--bin", "audiorouter-dashboard-api", "--", "--addr", apiAddr],
   { cwd: workspaceDir, env: cargoEnv },
 );
 

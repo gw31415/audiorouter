@@ -18,17 +18,25 @@ use audiorouter_core::api_types::{
 use audiorouter_core::{
     ConfigFileWatcher, DevicePoller, DevicesResponse, RuntimeSnapshot, list_audio_devices,
 };
-use axum::extract::State;
+use axum::body::Body;
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderValue;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
+use include_dir::{Dir, include_dir};
 use serde::Serialize;
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
-use tower_http::services::ServeDir;
+
+// Embedded frontend produced by `pnpm build` (see build.rs). Embedding at
+// compile time removes any runtime dependency on a dist directory or CWD.
+static DIST_DIR: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/dashboard/dist");
 
 #[derive(Clone)]
 pub struct DashboardState {
@@ -222,10 +230,49 @@ pub fn api_router(state: DashboardState) -> Router {
         .with_state(state)
 }
 
-pub fn dashboard_router(state: DashboardState, dist_dir: impl Into<PathBuf>) -> Router {
+/// Build a router that serves the dashboard API under `/api/*` and serves the
+/// embedded frontend dist (compiled in via `include_dir!`) for everything else.
+///
+/// This composes [`api_router`] — the API-only router — and layers static-file
+/// hosting on top via a fallback handler that reads from the embedded `Dir`.
+pub fn dashboard_router(state: DashboardState) -> Router {
     Router::new()
         .nest("/api", api_router(state))
-        .fallback_service(ServeDir::new(dist_dir.into()).append_index_html_on_directories(true))
+        .fallback(serve_embedded)
+}
+
+/// Serve a file from the embedded `DIST_DIR`. Unknown paths fall back to
+/// `index.html` so client-side routing works (SPA convention).
+async fn serve_embedded(req: Request) -> Response {
+    let rel = req.uri().path().trim_start_matches('/');
+    if let Some(file) = DIST_DIR.get_file(rel) {
+        return embedded_response(file.path(), file.contents());
+    }
+    if (rel.is_empty() || !looks_like_asset(rel))
+        && let Some(file) = DIST_DIR.get_file("index.html")
+    {
+        return embedded_response(file.path(), file.contents());
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "not found" })),
+    )
+        .into_response()
+}
+
+// ponytail: naive heuristic — anything with an extension is an asset request;
+// extensionless paths are treated as SPA routes and get index.html.
+fn looks_like_asset(path: &str) -> bool {
+    std::path::Path::new(path).extension().is_some()
+}
+
+fn embedded_response(path: &std::path::Path, body: &[u8]) -> Response {
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let mut response = Response::new(Body::from(body.to_vec()));
+    if let Ok(value) = HeaderValue::from_str(mime.as_ref()) {
+        response.headers_mut().insert(CONTENT_TYPE, value);
+    }
+    response
 }
 
 pub struct DashboardHandle {
@@ -359,7 +406,7 @@ mod tests {
 
     fn unique_config_path(name: &str) -> PathBuf {
         let unique = format!(
-            "audiorouter-dashboard-api-{name}-{}-{:?}",
+            "audiorouter-dashboard-{name}-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
         );
