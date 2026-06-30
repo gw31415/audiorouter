@@ -66,6 +66,7 @@ pub struct ResolvedDevice {
 }
 
 /// A fully resolved set of devices, ready for stream opening.
+#[derive(Clone)]
 pub struct ResolvedAudioDevices {
     pub devices: HashMap<String, ResolvedDevice>,
     /// Warnings about config-defined devices that are not currently connected.

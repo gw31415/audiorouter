@@ -15,7 +15,9 @@ use audiorouter_core::api_types::{
     ConfigStatusResponse, ValidateResponse, dashboard_config_status, read_dashboard_config,
     stringify_dashboard_config, validate_dashboard_config,
 };
-use audiorouter_core::{ConfigFileWatcher, DevicePoller, DevicesResponse, list_audio_devices};
+use audiorouter_core::{
+    ConfigFileWatcher, DevicePoller, DevicesResponse, RuntimeSnapshot, list_audio_devices,
+};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -107,7 +109,9 @@ impl DashboardState {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if let Some(events) = poller.poll() {
-                    tracing::info!("device change detected: {}", events.join("; "));
+                    let summary = events.join("; ");
+                    tracing::info!("device change detected: {}", summary);
+                    state.emit_log("info", format!("device change: {}", summary));
                     state.emit_devices_changed(events);
                 }
             }
@@ -129,31 +133,12 @@ impl DashboardState {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if watcher.poll() {
                     tracing::info!("config file changed on disk");
+                    state.emit_log("info", "config file changed on disk");
                     state.emit_config_changed();
                 }
             }
         })
     }
-}
-
-#[derive(Debug, Clone, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeSnapshot {
-    pub state: RuntimeState,
-    pub disabled_route_indices: Vec<usize>,
-    pub unavailable_inputs: Vec<String>,
-    pub unavailable_outputs: Vec<String>,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeState {
-    #[default]
-    Starting,
-    Running,
-    Stopped,
-    FatalError,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,6 +232,10 @@ async fn put_config(
 
     let raw = stringify_dashboard_config(&req.config)?;
     std::fs::write(state.config_path(), &raw)?;
+    state.emit_log(
+        "info",
+        format!("config saved to {}", state.config_path().display()),
+    );
     let version = state.config_version.fetch_add(1, Ordering::Relaxed) + 1;
     let _ = state.event_tx.send(DashboardEvent::ConfigSaved { version });
 

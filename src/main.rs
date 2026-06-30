@@ -2,7 +2,8 @@
 
 mod audio;
 mod cli;
-pub use audiorouter_core::{config, devices, error, validate};
+mod engine_actor;
+pub use audiorouter_core::{RuntimeSnapshot, RuntimeState, config, devices, error, validate};
 mod graph;
 mod log_buffer;
 mod meter;
@@ -12,12 +13,12 @@ mod ui;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
-use std::time::Duration;
 
 use clap::{CommandFactory, FromArgMatches};
 
 use crate::cli::{Cli, Command};
 use crate::config::{read_config, resolve_config_path};
+use crate::engine_actor::{EngineCmd, EngineHandle};
 use crate::error::{AppError, exit_code_for};
 use crate::validate::validate_config;
 
@@ -26,7 +27,8 @@ const APP_VERSION: &str = match option_env!("APP_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let matches = Cli::command().version(APP_VERSION).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let command = cli.command_or_default();
@@ -35,7 +37,7 @@ fn main() -> ExitCode {
     // Initialize logging level and destination.
     init_logging(&cli, &command, interactive);
 
-    match dispatch(&cli, command, interactive) {
+    match dispatch(&cli, command, interactive).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             ui::error(&e.message);
@@ -84,12 +86,12 @@ fn is_interactive_run(command: &Command) -> bool {
         && std::io::stdout().is_terminal()
 }
 
-fn dispatch(cli: &Cli, command: Command, interactive: bool) -> Result<(), AppError> {
+async fn dispatch(cli: &Cli, command: Command, interactive: bool) -> Result<(), AppError> {
     match command {
         Command::ConfigPath => run_print_config_path(cli),
         Command::ListDevices => run_list_devices(cli),
         Command::Check => run_check(cli),
-        Command::Run => run_run(cli, interactive),
+        Command::Run => run_run(cli, interactive).await,
         Command::Completions { shell, output } => run_completions(shell, output.as_deref()),
     }
 }
@@ -266,7 +268,7 @@ fn run_check(cli: &Cli) -> Result<(), AppError> {
     Ok(())
 }
 
-fn run_run(cli: &Cli, interactive: bool) -> Result<(), AppError> {
+async fn run_run(cli: &Cli, interactive: bool) -> Result<(), AppError> {
     let path = resolve_config_path(cli.config.as_deref())
         .map_err(|e| AppError::runtime(format!("cannot resolve config path: {e}")))?;
 
@@ -293,46 +295,49 @@ fn run_run(cli: &Cli, interactive: bool) -> Result<(), AppError> {
     let mut warnings = plan.warnings.clone();
     warnings.extend(resolved.connect_warnings.iter().cloned());
 
-    // Build the audio engine.
+    // Build the audio engine and spawn the engine actor thread.
     let engine = audio::AudioEngine::new(plan, resolved, &path)?;
+    let (handle, engine_thread) = engine_actor::spawn_engine_actor(engine);
 
-    if interactive {
-        // Run the TUI event loop (handles its own Ctrl-C / quit).
-        tui::run(engine, &path, &warnings)?;
+    let result = if interactive {
+        let path_clone = path.clone();
+        let warnings_clone = warnings.clone();
+        tokio::task::spawn_blocking(move || tui::run(handle, &path_clone, &warnings_clone))
+            .await
+            .map_err(|e| AppError::runtime(format!("TUI thread panicked: {e}")))?
     } else {
-        run_headless(engine)?;
-    }
+        run_headless(handle).await
+    };
 
-    Ok(())
+    engine_thread.join().ok();
+    result
 }
 
-fn run_headless(mut engine: audio::AudioEngine) -> Result<(), AppError> {
+async fn run_headless(handle: EngineHandle) -> Result<(), AppError> {
     tracing::info!("audiorouter started in non-interactive mode");
 
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let running_for_handler = running.clone();
-    ctrlc::set_handler(move || {
-        running_for_handler.store(false, std::sync::atomic::Ordering::SeqCst);
-    })
-    .map_err(|e| AppError::runtime(format!("failed to install Ctrl-C handler: {e}")))?;
-
-    while running.load(std::sync::atomic::Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_secs(1));
-
-        for event in engine.refresh_devices()? {
-            tracing::info!("{event}");
-        }
-
-        match engine.state() {
-            audio::EngineState::Running => {}
-            audio::EngineState::Stopped => break,
-            audio::EngineState::FatalError => {
-                return Err(AppError::runtime("fatal audio stream error"));
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                handle.cmd_tx.try_send(EngineCmd::Stop).ok();
+                break;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                let state = {
+                    let view = handle.shared.read().unwrap();
+                    view.snapshot.state.clone()
+                };
+                match state {
+                    RuntimeState::Running | RuntimeState::Starting => {}
+                    RuntimeState::Stopped => break,
+                    RuntimeState::FatalError => {
+                        return Err(AppError::runtime("fatal audio stream error"));
+                    }
+                }
             }
         }
     }
 
-    engine.stop();
     tracing::info!("audiorouter stopped");
     Ok(())
 }

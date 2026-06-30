@@ -18,6 +18,7 @@ import {
   recomputeNodeData,
 } from "./components/flow-utils";
 import { FlowCanvas } from "./components/FlowCanvas";
+import { LogPanel, type LogLine } from "./components/LogPanel";
 import { SidePanel } from "./components/SidePanel";
 import type { Selection } from "./components/SidePanel";
 import { TomlPreview } from "./components/TomlPreview";
@@ -28,7 +29,7 @@ import type { AudiorouterConfig, DeviceConfig, RouteConfig } from "./types";
 import { createEmptyConfig } from "./types";
 
 type LoadState = "loading" | "loaded" | "error";
-type BottomTab = "validation" | "toml";
+type BottomTab = "validation" | "toml" | "log";
 
 function configFingerprint(config: AudiorouterConfig): string {
   return JSON.stringify(config);
@@ -107,6 +108,7 @@ export default function App() {
   // so the UI reflects the new connectivity without manual refresh.
   const [sseDeviceVersion, setSseDeviceVersion] = useState(0);
   const [configFileChanged, setConfigFileChanged] = useState(false);
+  const [logLines, setLogLines] = useState<LogLine[]>([]);
 
   const sseRef = useRef<EventSource | null>(null);
 
@@ -126,6 +128,18 @@ export default function App() {
 
     es.addEventListener("config_changed", () => {
       setConfigFileChanged(true);
+    });
+
+    es.addEventListener("log", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as { level: string; message: string; timestamp: string };
+        setLogLines((prev) => [
+          ...prev,
+          { level: data.level, message: data.message, timestamp: data.timestamp },
+        ]);
+      } catch {
+        // ignore malformed log events
+      }
     });
 
     es.onerror = () => {
@@ -891,13 +905,22 @@ export default function App() {
               label="config.toml"
               onClick={() => toggleBottomTab("toml")}
             />
+            <BottomTabButton
+              active={activeBottomTab === "log"}
+              label="log"
+              badge={logLines.length > 0 ? logLines.length : undefined}
+              tone="ok"
+              onClick={() => toggleBottomTab("log")}
+            />
           </div>
           {activeBottomTab && (
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {activeBottomTab === "validation" ? (
                 <ValidationPanel errors={allErrors} warnings={clientWarnings} />
-              ) : (
+              ) : activeBottomTab === "toml" ? (
                 <TomlPreview toml={tomlPreview} />
+              ) : (
+                <LogPanel lines={logLines} />
               )}
             </div>
           )}

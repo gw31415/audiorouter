@@ -24,6 +24,7 @@ serde = { version = ">=1,<2", features = ["derive"] }
 toml = ">=1.1,<1.2"
 ratatui = ">=0.30,<0.31"
 crossterm = ">=0.29,<0.30"
+tokio = { version = ">=1,<2", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tracing = ">=0.1,<0.2"
 tracing-subscriber = { version = ">=0.3,<0.4", features = ["env-filter"] }
 unicode-width = ">=0.2,<0.3"

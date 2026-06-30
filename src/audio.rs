@@ -102,6 +102,10 @@ impl AudioEngine {
         self.running.store(false, Ordering::SeqCst);
     }
 
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.config_path
+    }
+
     /// Check the current engine state.
     pub fn state(&self) -> EngineState {
         if self.fatal_error.load(Ordering::SeqCst) {
@@ -110,6 +114,37 @@ impl AudioEngine {
             EngineState::Running
         } else {
             EngineState::Stopped
+        }
+    }
+
+    pub fn runtime_snapshot(&self) -> crate::RuntimeSnapshot {
+        use crate::RuntimeState;
+        let state = match self.state() {
+            EngineState::Running => RuntimeState::Running,
+            EngineState::FatalError => RuntimeState::FatalError,
+            EngineState::Stopped => RuntimeState::Stopped,
+        };
+        let mut disabled: Vec<usize> = self
+            .resolved
+            .disabled_route_indices
+            .iter()
+            .copied()
+            .collect();
+        disabled.sort_unstable();
+        let mut unavailable_inputs: Vec<String> =
+            self.resolved.unavailable_inputs.iter().cloned().collect();
+        unavailable_inputs.sort();
+        let mut unavailable_outputs: Vec<String> =
+            self.resolved.unavailable_outputs.iter().cloned().collect();
+        unavailable_outputs.sort();
+        let mut warnings = self.plan.warnings.clone();
+        warnings.extend(self.resolved.connect_warnings.iter().cloned());
+        crate::RuntimeSnapshot {
+            state,
+            disabled_route_indices: disabled,
+            unavailable_inputs,
+            unavailable_outputs,
+            warnings,
         }
     }
 

@@ -42,13 +42,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::audio::{AudioEngine, EngineState};
+use crate::RuntimeState;
+use crate::engine_actor::{EngineCmd, EngineHandle};
 use crate::validate::ValidatedConfig;
-use audiorouter_core::{ConfigFileWatcher, DevicePoller};
 
 const TICK_RATE: Duration = Duration::from_millis(50); // 20 fps UI refresh
-const RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
-const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 // ── Semantic color palette for routing graph ──────────────────────────────
 /// Node border (available device).
@@ -64,19 +62,16 @@ const COLOR_GAIN: Color = Color::Yellow;
 /// Clip / overload indicator.
 const COLOR_CLIP: Color = Color::Red;
 
-/// Run the TUI event loop over an audio engine until the user quits.
+/// Run the TUI event loop using an engine actor handle until the user quits.
 ///
 /// # Errors
 ///
 /// Returns an error if terminal setup fails or a fatal audio error occurs.
 pub fn run(
-    mut engine: AudioEngine,
+    handle: EngineHandle,
     config_path: &std::path::Path,
     warnings: &[String],
 ) -> Result<(), crate::error::AppError> {
-    let watcher = ConfigFileWatcher::new(config_path);
-    let mut device_poller = DevicePoller::new(DEVICE_POLL_INTERVAL);
-
     // Terminal setup
     enable_raw_mode().map_err(term_err)?;
     let mut stdout = io::stdout();
@@ -87,8 +82,6 @@ pub fn run(
     let start_time = Instant::now();
     let mut loop_state = LoopState {
         log_lines: warnings.to_vec(),
-        reload_pending: None,
-        reload_message: None,
         last_tick: Instant::now(),
         show_disconnected_devices: false,
         show_missing_devices: true,
@@ -97,14 +90,7 @@ pub fn run(
     };
 
     // Result stored here so we can restore the terminal before returning.
-    let result = run_loop(
-        &mut terminal,
-        &mut engine,
-        &watcher,
-        &mut device_poller,
-        start_time,
-        &mut loop_state,
-    );
+    let result = run_loop(&mut terminal, &handle, start_time, &mut loop_state);
 
     // Restore terminal
     disable_raw_mode().ok();
@@ -117,8 +103,6 @@ pub fn run(
 /// Mutable state carried across TUI loop iterations.
 struct LoopState {
     log_lines: Vec<String>,
-    reload_pending: Option<Instant>,
-    reload_message: Option<String>,
     last_tick: Instant,
     show_disconnected_devices: bool,
     show_missing_devices: bool,
@@ -132,9 +116,7 @@ const LOG_VISIBLE_LINES: u16 = LOG_PANEL_HEIGHT.saturating_sub(2);
 /// Inner loop — separated so terminal restoration always runs.
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    engine: &mut AudioEngine,
-    watcher: &ConfigFileWatcher,
-    device_poller: &mut DevicePoller,
+    handle: &EngineHandle,
     start_time: Instant,
     st: &mut LoopState,
 ) -> Result<(), crate::error::AppError> {
@@ -153,14 +135,14 @@ fn run_loop(
             }
             match key.code {
                 KeyCode::Char('q') => {
-                    engine.stop();
+                    handle.cmd_tx.try_send(EngineCmd::Stop).ok();
                     break;
                 }
                 KeyCode::Esc => {
                     if st.show_help {
                         st.show_help = false;
                     } else {
-                        engine.stop();
+                        handle.cmd_tx.try_send(EngineCmd::Stop).ok();
                         break;
                     }
                 }
@@ -168,23 +150,20 @@ fn run_loop(
                     st.show_help = !st.show_help;
                 }
                 KeyCode::Char('r') => {
-                    // Manual reload trigger.
-                    st.reload_pending = Some(Instant::now());
+                    handle.cmd_tx.try_send(EngineCmd::Reload).ok();
                 }
                 KeyCode::Char('l')
                     if key
                         .modifiers
                         .contains(crossterm::event::KeyModifiers::CONTROL) =>
                 {
-                    // Reset all peak-hold / clip indicators.
-                    engine.meter_bank().reset_all_peaks();
+                    handle.cmd_tx.try_send(EngineCmd::ResetPeaks).ok();
                     st.log_lines.push(format!(
                         "[{}] peak-hold / clip reset",
                         timestamp(start_time)
                     ));
                 }
                 KeyCode::Char('h') => {
-                    // Toggle visibility of devices not participating in any route.
                     st.show_disconnected_devices = !st.show_disconnected_devices;
                     st.log_lines.push(format!(
                         "[{}] disconnected devices {}",
@@ -197,7 +176,6 @@ fn run_loop(
                     ));
                 }
                 KeyCode::Char('H') => {
-                    // Toggle visibility of devices disabled by missing hardware.
                     st.show_missing_devices = !st.show_missing_devices;
                     st.log_lines.push(format!(
                         "[{}] missing devices {}",
@@ -214,7 +192,7 @@ fn run_loop(
                         .modifiers
                         .contains(crossterm::event::KeyModifiers::CONTROL) =>
                 {
-                    engine.stop();
+                    handle.cmd_tx.try_send(EngineCmd::Stop).ok();
                     break;
                 }
                 KeyCode::Char('g') => {
@@ -248,80 +226,42 @@ fn run_loop(
 
         scroll = clamp_log_scroll(scroll, st.log_lines.len());
 
-        // Check for config changes.
-        if watcher.poll() {
-            st.reload_pending = Some(Instant::now());
-            st.log_lines.push(format!(
-                "[{}] config file changed — preparing to reload",
-                timestamp(start_time)
-            ));
+        // Drain log messages from the engine actor (state-change events).
+        while let Ok(msg) = handle.log_rx.try_recv() {
+            st.log_lines
+                .push(format!("[{}] {msg}", timestamp(start_time)));
         }
 
-        // Execute debounced reload.
-        if let Some(t) = st.reload_pending
-            && t.elapsed() >= RELOAD_DEBOUNCE
-        {
-            st.reload_pending = None;
-            match engine.reload() {
-                Ok(()) => {
-                    st.reload_message = None;
-                    st.log_lines
-                        .push(format!("[{}] hot-reload succeeded", timestamp(start_time)));
-                }
-                Err(e) => {
-                    st.reload_message = Some(format!("reload failed: {e}"));
-                    st.log_lines
-                        .push(format!("[{}] reload failed: {e}", timestamp(start_time)));
-                }
-            }
-        }
-
-        // Drain tracing output into the TUI log panel. In interactive run mode,
-        // the tracing subscriber writes to an in-memory buffer instead of
-        // stderr so it cannot overlap the ratatui alternate screen.
+        // Drain tracing output captured by TuiLogMakeWriter.
         for line in crate::log_buffer::drain() {
             st.log_lines
                 .push(format!("[{}] {line}", timestamp(start_time)));
         }
 
-        // Poll physical device connectivity. DevicePoller rate-limits internally
-        // and only returns Some(events) when the system device inventory changed.
-        // When that happens, we ask the engine to re-resolve config devices and
-        // rebuild any affected streams.
-        if let Some(events) = device_poller.poll() {
-            for event in &events {
-                st.log_lines
-                    .push(format!("[{}] {event}", timestamp(start_time)));
-            }
-            match engine.refresh_devices() {
-                Ok(refresh_events) => {
-                    for event in refresh_events {
-                        st.log_lines
-                            .push(format!("[{}] {event}", timestamp(start_time)));
-                    }
-                }
-                Err(e) => {
-                    st.log_lines.push(format!(
-                        "[{}] device refresh failed: {e}",
-                        timestamp(start_time)
-                    ));
-                }
-            }
-        }
+        // Read current engine view snapshot.
+        let (plan_arc, resolved_arc, meter_bank_arc, engine_state) = {
+            let view = handle.shared.read().unwrap();
+            (
+                view.plan.clone(),
+                view.resolved.clone(),
+                view.meter_bank.clone(),
+                view.snapshot.state.clone(),
+            )
+        };
 
-        // Check engine state.
-        match engine.state() {
-            EngineState::FatalError => {
+        match engine_state {
+            RuntimeState::FatalError => {
                 st.log_lines.push(format!(
                     "[{}] fatal audio error — exiting",
                     timestamp(start_time)
                 ));
                 draw(
                     terminal,
-                    engine,
+                    &plan_arc,
+                    &resolved_arc,
+                    &meter_bank_arc,
                     start_time,
                     &st.log_lines,
-                    &st.reload_message,
                     scroll,
                     st.show_disconnected_devices,
                     st.show_missing_devices,
@@ -331,18 +271,17 @@ fn run_loop(
                 std::thread::sleep(Duration::from_secs(2));
                 return Err(crate::error::AppError::runtime("fatal audio stream error"));
             }
-            EngineState::Stopped => {
-                break;
-            }
-            EngineState::Running => {}
+            RuntimeState::Stopped => break,
+            _ => {}
         }
 
         draw(
             terminal,
-            engine,
+            &plan_arc,
+            &resolved_arc,
+            &meter_bank_arc,
             start_time,
             &st.log_lines,
-            &st.reload_message,
             scroll,
             st.show_disconnected_devices,
             st.show_missing_devices,
@@ -368,10 +307,11 @@ fn clamp_log_scroll(scroll: u16, total_lines: usize) -> u16 {
 #[allow(clippy::too_many_arguments)]
 fn draw(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    engine: &AudioEngine,
+    plan: &ValidatedConfig,
+    resolved: &crate::devices::ResolvedAudioDevices,
+    meter_bank: &crate::meter::MeterBank,
     start_time: Instant,
     log_lines: &[String],
-    reload_message: &Option<String>,
     scroll: u16,
     show_disconnected: bool,
     show_missing: bool,
@@ -380,16 +320,11 @@ fn draw(
 ) -> Result<(), crate::error::AppError> {
     terminal
         .draw(|f| {
-            let plan = engine.plan();
-            let meter_bank = engine.meter_bank();
-            let resolved = engine.resolved();
-
-            // ── Top-level layout ──────────────────────────────────────
             let area = f.area();
 
             // Compact status bar for small terminals.
             if area.height < 16 {
-                draw_compact(f, area, engine, start_time, plan, resolved);
+                draw_compact(f, area, start_time, plan, resolved, meter_bank);
                 return;
             }
 
@@ -403,15 +338,7 @@ fn draw(
                 ])
                 .split(area);
 
-            draw_status_bar(
-                f,
-                chunks[0],
-                plan,
-                resolved,
-                start_time,
-                reload_message,
-                config_path,
-            );
+            draw_status_bar(f, chunks[0], plan, resolved, start_time, config_path);
             draw_routing_graph(
                 f,
                 chunks[1],
@@ -445,7 +372,6 @@ fn draw_status_bar(
     plan: &ValidatedConfig,
     resolved: &crate::devices::ResolvedAudioDevices,
     start_time: Instant,
-    _reload_message: &Option<String>,
     config_path: &std::path::Path,
 ) {
     let elapsed = start_time.elapsed();
@@ -509,10 +435,10 @@ fn abbreviate_home(path: &std::path::Path) -> String {
 fn draw_compact(
     f: &mut ratatui::Frame<'_>,
     area: Rect,
-    engine: &AudioEngine,
     start_time: Instant,
     plan: &ValidatedConfig,
     resolved: &crate::devices::ResolvedAudioDevices,
+    meter_bank: &crate::meter::MeterBank,
 ) {
     let mut lines = vec![Line::from(Span::styled(
         format!(
@@ -528,7 +454,7 @@ fn draw_compact(
     ))];
 
     for (i, route) in plan.routes.iter().enumerate() {
-        let meter = engine.meter_bank().get(&route.from, 1);
+        let meter = meter_bank.get(&route.from, 1);
         let level = meter.map(|m| m.snapshot().peak).unwrap_or(0.0);
         let bar_len = ((level * 10.0) as usize).min(10);
         let bar: String = "█".repeat(bar_len);

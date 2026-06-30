@@ -8,6 +8,7 @@ pub mod error;
 pub mod monitor;
 pub mod validate;
 
+pub use api_types::{RuntimeSnapshot, RuntimeState};
 pub use config::{
     Config, DEFAULT_BUFFER_SIZE, DEFAULT_SAMPLE_RATE, DeviceConfig, EngineConfig, RouteConfig,
     default_config_path, read_config, resolve_config_path,

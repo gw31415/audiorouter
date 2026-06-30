@@ -9,6 +9,29 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+// ── Runtime state ─────────────────────────────────────────────────────────────
+
+/// Live state of the audio engine, pushed to the dashboard via SSE.
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSnapshot {
+    pub state: RuntimeState,
+    pub disabled_route_indices: Vec<usize>,
+    pub unavailable_inputs: Vec<String>,
+    pub unavailable_outputs: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeState {
+    #[default]
+    Starting,
+    Running,
+    Stopped,
+    FatalError,
+}
+
 use std::collections::HashSet;
 
 use crate::config::{
