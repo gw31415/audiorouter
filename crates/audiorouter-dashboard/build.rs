@@ -13,10 +13,22 @@ fn main() {
     let frontend_dir = std::path::Path::new(&manifest_dir).join("dashboard");
     let dist_dir = format!("{out_dir}/dist");
 
-    let status = std::process::Command::new("pnpm")
-        .arg("build")
-        .env("AUDIOROUTER_DIST_DIR", &dist_dir)
-        .current_dir(&frontend_dir)
+    let mut cmd = if cfg!(windows) {
+        // ponytail: Rust's Command doesn't search PATHEXT, so pnpm.cmd isn't
+        // found directly; shell out via cmd. Upgrade to which::glob resolution
+        // if we ever need arg quoting beyond what cmd /c handles.
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/c", "pnpm", "build"]);
+        c
+    } else {
+        let mut c = std::process::Command::new("pnpm");
+        c.arg("build");
+        c
+    };
+    cmd.env("AUDIOROUTER_DIST_DIR", &dist_dir)
+        .current_dir(&frontend_dir);
+
+    let status = cmd
         .status()
         .unwrap_or_else(|e| {
             panic!(
