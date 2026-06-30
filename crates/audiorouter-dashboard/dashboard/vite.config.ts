@@ -1,23 +1,29 @@
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
+import { apiServer } from "./plugins/api-server";
+import { prerenderBundle } from "./plugins/prerender-bundle";
 
-const apiTarget = process.env.AUDIOROUTER_API ?? "http://127.0.0.1:7822";
+const dashboardRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
+  root: dashboardRoot,
   resolve: { tsconfigPaths: true },
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // Dev: spawns audiorouter-dashboard-api (Rust) + configures /api proxy.
+    // Build: no-op.
+    apiServer(),
+    // Build-time SSG: renders <App /> to static HTML via the required
+    // `prerender` export entry, then cleans up prerender artifacts.
+    // In dev, this is a no-op.
+    ...prerenderBundle({ prerenderScript: "src/main.tsx" }),
+  ],
   build: {
     outDir: process.env.AUDIOROUTER_DIST_DIR ?? "dist",
     emptyOutDir: true,
-  },
-  server: {
-    proxy: {
-      "/api": {
-        target: apiTarget,
-        changeOrigin: true,
-      },
-    },
   },
   lint: {
     options: {

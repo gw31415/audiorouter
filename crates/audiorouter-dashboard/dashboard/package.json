@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev.ts",
+    "dev": "vp dev",
     "build": "vp build",
     "preview": "vp preview",
     "check": "vp check",
@@ -27,7 +27,8 @@
     "tailwindcss": "^4.3.2",
     "typescript": "^6.0.3",
     "vite": "*",
-    "vite-plus": "^0.2.1"
+    "vite-plus": "^0.2.1",
+    "vite-prerender-plugin": "^0.5.13"
   },
   "engines": {
     "node": ">=24.11.0",
