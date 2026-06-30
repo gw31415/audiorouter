@@ -7,8 +7,8 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use audiorouter_core::api_types::{
     ConfigLoadResponse, ConfigPreviewResponse, ConfigSaveRequest, ConfigSaveResponse,
@@ -38,6 +38,7 @@ pub struct DashboardState {
     config_version: Arc<AtomicU64>,
     device_version: Arc<AtomicU64>,
     runtime_version: Arc<AtomicU64>,
+    last_dashboard_written_config: Arc<Mutex<Option<String>>>,
 }
 
 impl DashboardState {
@@ -50,6 +51,7 @@ impl DashboardState {
             config_version: Arc::new(AtomicU64::new(0)),
             device_version: Arc::new(AtomicU64::new(0)),
             runtime_version: Arc::new(AtomicU64::new(0)),
+            last_dashboard_written_config: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -92,6 +94,33 @@ impl DashboardState {
         });
     }
 
+    fn remember_dashboard_written_config(&self, raw: String) {
+        if let Ok(mut last_written) = self.last_dashboard_written_config.lock() {
+            *last_written = Some(raw);
+        }
+    }
+
+    fn forget_dashboard_written_config_if_matches(&self, raw: &str) {
+        if let Ok(mut last_written) = self.last_dashboard_written_config.lock()
+            && last_written.as_deref() == Some(raw)
+        {
+            *last_written = None;
+        }
+    }
+
+    fn should_emit_config_changed_after_file_event(&self) -> bool {
+        let Ok(current_raw) = std::fs::read_to_string(&self.config_path) else {
+            // Missing/unreadable config is still an external state change the UI should surface.
+            return true;
+        };
+
+        let Ok(last_written) = self.last_dashboard_written_config.lock() else {
+            return true;
+        };
+
+        last_written.as_deref() != Some(current_raw.as_str())
+    }
+
     /// Spawn a background task that polls CoreAudio every 2 seconds and emits
     /// `DevicesChanged` events when device connections, channel counts, or
     /// defaults change.
@@ -132,9 +161,13 @@ impl DashboardState {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if watcher.poll() {
-                    tracing::info!("config file changed on disk");
-                    state.emit_log("info", "config file changed on disk");
-                    state.emit_config_changed();
+                    if state.should_emit_config_changed_after_file_event() {
+                        tracing::info!("config file changed on disk");
+                        state.emit_log("info", "config file changed on disk");
+                        state.emit_config_changed();
+                    } else {
+                        tracing::debug!("ignored config file event from dashboard save");
+                    }
                 }
             }
         })
@@ -231,7 +264,11 @@ async fn put_config(
     }
 
     let raw = stringify_dashboard_config(&req.config)?;
-    std::fs::write(state.config_path(), &raw)?;
+    state.remember_dashboard_written_config(raw.clone());
+    if let Err(error) = std::fs::write(state.config_path(), &raw) {
+        state.forget_dashboard_written_config_if_matches(&raw);
+        return Err(error.into());
+    }
     state.emit_log(
         "info",
         format!("config saved to {}", state.config_path().display()),
@@ -314,4 +351,43 @@ fn chrono_like_timestamp() -> String {
     // Avoid adding a time crate just for log event DTOs; consumers treat this as
     // an opaque display timestamp until the CLI wires real structured logs in.
     format!("{:?}", std::time::SystemTime::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_config_path(name: &str) -> PathBuf {
+        let unique = format!(
+            "audiorouter-dashboard-api-{name}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        );
+        std::env::temp_dir().join(unique).join("config.toml")
+    }
+
+    #[test]
+    fn dashboard_written_config_does_not_emit_config_changed() {
+        let config_path = unique_config_path("internal-save");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let state = DashboardState::new(&config_path);
+        let raw = "[[routes]]\nfrom = 'mic'\nto = 'speakers'\n".to_string();
+
+        state.remember_dashboard_written_config(raw.clone());
+        std::fs::write(&config_path, raw).unwrap();
+
+        assert!(!state.should_emit_config_changed_after_file_event());
+    }
+
+    #[test]
+    fn external_config_change_after_dashboard_save_emits_config_changed() {
+        let config_path = unique_config_path("external-save");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let state = DashboardState::new(&config_path);
+
+        state.remember_dashboard_written_config("dashboard version".to_string());
+        std::fs::write(&config_path, "external version").unwrap();
+
+        assert!(state.should_emit_config_changed_after_file_event());
+    }
 }
