@@ -634,55 +634,8 @@ fn draw_routing_graph(
         .collect();
 
     let ne = visible_edges.len();
-    let mut src_ys = vec![0u16; ne];
-    let mut dst_ys = vec![0u16; ne];
+    let (src_ys, dst_ys) = assign_connection_rows(&visible_edges, &nodes, node_h);
     let mut mid_xs = vec![0u16; ne];
-
-    // Spread exit y-positions within the source node for all its outgoing routes.
-    {
-        let mut groups: std::collections::HashMap<usize, Vec<usize>> =
-            std::collections::HashMap::new();
-        for (ei, &(_, si, _)) in visible_edges.iter().enumerate() {
-            groups.entry(si).or_default().push(ei);
-        }
-        for (si, mut indices) in groups {
-            indices.sort_unstable();
-            let n = indices.len();
-            let node = &nodes[si];
-            let inner_h = node_h.saturating_sub(2) as usize; // rows inside the border
-            for (i, ei) in indices.into_iter().enumerate() {
-                src_ys[ei] = if n == 1 {
-                    node.y + node_h / 2
-                } else {
-                    let offset = i * inner_h.saturating_sub(1) / (n - 1);
-                    node.y + 1 + offset as u16
-                };
-            }
-        }
-    }
-
-    // Spread entry y-positions within the destination node for all incoming routes.
-    {
-        let mut groups: std::collections::HashMap<usize, Vec<usize>> =
-            std::collections::HashMap::new();
-        for (ei, &(_, _, di)) in visible_edges.iter().enumerate() {
-            groups.entry(di).or_default().push(ei);
-        }
-        for (di, mut indices) in groups {
-            indices.sort_unstable();
-            let n = indices.len();
-            let node = &nodes[di];
-            let inner_h = node_h.saturating_sub(2) as usize;
-            for (i, ei) in indices.into_iter().enumerate() {
-                dst_ys[ei] = if n == 1 {
-                    node.y + node_h / 2
-                } else {
-                    let offset = i * inner_h.saturating_sub(1) / (n - 1);
-                    node.y + 1 + offset as u16
-                };
-            }
-        }
-    }
 
     // Spread mid_x within each inter-node corridor (same src_right / dst_left pair).
     {
@@ -784,6 +737,62 @@ struct NodeInfo {
     alias: String,
     x: u16,
     y: u16,
+}
+
+fn assign_connection_rows(
+    visible_edges: &[(usize, usize, usize)],
+    nodes: &[NodeInfo],
+    node_h: u16,
+) -> (Vec<u16>, Vec<u16>) {
+    let mut src_ys = vec![0u16; visible_edges.len()];
+    let mut dst_ys = vec![0u16; visible_edges.len()];
+
+    // Spread exit y-positions within each source node. The visual order must
+    // follow the destination nodes' vertical order, not the config/route order;
+    // otherwise paths can leave a node in the opposite order and immediately
+    // cross each other.
+    let mut outgoing: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (ei, &(_, si, _)) in visible_edges.iter().enumerate() {
+        outgoing.entry(si).or_default().push(ei);
+    }
+    for (si, mut indices) in outgoing {
+        indices.sort_by_key(|&ei| {
+            let (ri, _, di) = visible_edges[ei];
+            (nodes[di].y, nodes[di].x, ri, ei)
+        });
+        assign_rows_for_node(&mut src_ys, indices, nodes[si].y, node_h);
+    }
+
+    // Spread entry y-positions within each destination node. Symmetrically,
+    // incoming paths keep the same top-to-bottom order as their source nodes.
+    let mut incoming: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (ei, &(_, _, di)) in visible_edges.iter().enumerate() {
+        incoming.entry(di).or_default().push(ei);
+    }
+    for (di, mut indices) in incoming {
+        indices.sort_by_key(|&ei| {
+            let (ri, si, _) = visible_edges[ei];
+            (nodes[si].y, nodes[si].x, ri, ei)
+        });
+        assign_rows_for_node(&mut dst_ys, indices, nodes[di].y, node_h);
+    }
+
+    (src_ys, dst_ys)
+}
+
+fn assign_rows_for_node(rows: &mut [u16], indices: Vec<usize>, node_y: u16, node_h: u16) {
+    let n = indices.len();
+    let inner_h = node_h.saturating_sub(2) as usize; // rows inside the border
+    for (i, ei) in indices.into_iter().enumerate() {
+        rows[ei] = if n == 1 {
+            node_y + node_h / 2
+        } else {
+            let offset = i * inner_h.saturating_sub(1) / (n - 1);
+            node_y + 1 + offset as u16
+        };
+    }
 }
 
 /// Draw a smoothstep-style edge between two nodes using Unicode box-drawing chars.
@@ -1549,5 +1558,37 @@ to_channels = [1, 2]
         let plan = validate_config(config).unwrap();
 
         assert_eq!(configured_channel_counts(&plan, "missing"), (2, 0));
+    }
+
+    #[test]
+    fn connection_rows_follow_peer_vertical_order_not_route_order() {
+        let nodes = vec![
+            NodeInfo {
+                alias: "src".to_string(),
+                x: 0,
+                y: 10,
+            },
+            NodeInfo {
+                alias: "lower".to_string(),
+                x: 40,
+                y: 40,
+            },
+            NodeInfo {
+                alias: "upper".to_string(),
+                x: 40,
+                y: 0,
+            },
+        ];
+        // Deliberately put the lower destination first, matching configs that
+        // used to make the upper path leave from the lower source port.
+        let visible_edges = vec![(0, 0, 1), (1, 0, 2)];
+
+        let (src_ys, dst_ys) = assign_connection_rows(&visible_edges, &nodes, 6);
+
+        assert!(
+            src_ys[1] < src_ys[0],
+            "upper destination must use upper source row"
+        );
+        assert_eq!(dst_ys, vec![43, 3]);
     }
 }
