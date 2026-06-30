@@ -53,7 +53,16 @@ console.log(`Starting audiorouter-dashboard-api at ${apiUrl}`);
 run(
   "audiorouter-dashboard-api",
   "cargo",
-  ["run", "-p", "audiorouter-dashboard", "--bin", "audiorouter-dashboard-api", "--", "--addr", apiAddr],
+  [
+    "run",
+    "-p",
+    "audiorouter-dashboard",
+    "--bin",
+    "audiorouter-dashboard-api",
+    "--",
+    "--addr",
+    apiAddr,
+  ],
   { cwd: workspaceDir, env: cargoEnv },
 );
 

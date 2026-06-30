@@ -23,6 +23,8 @@ interface Props {
   availableDevices: AudioDevice[];
   /** When true (canvas locked), all editing controls are disabled. */
   readOnly?: boolean;
+  /** When true, config is still loading — disable the add button. */
+  loading?: boolean;
 }
 
 export function SidePanel({
@@ -36,6 +38,7 @@ export function SidePanel({
   onAddDevice,
   availableDevices,
   readOnly = false,
+  loading = false,
 }: Props) {
   if (selection.kind === "none") {
     return (
@@ -49,7 +52,7 @@ export function SidePanel({
           <button
             type="button"
             onClick={onAddDevice}
-            disabled={readOnly}
+            disabled={readOnly || loading}
             className="rounded-md border border-[var(--color-border)] bg-[var(--color-secondary)] px-4 py-2 text-sm font-medium text-[var(--color-secondary-foreground)] transition hover:bg-[var(--color-muted)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             + デバイス追加

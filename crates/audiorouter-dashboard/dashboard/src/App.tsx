@@ -698,39 +698,12 @@ export default function App() {
     }
   }, [isDirty, setNodes, setEdges]);
 
-  // ── Loading states ──────────────────────────────────────
-  if (loadState === "loading") {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="animate-pulse text-sm text-[var(--color-muted-foreground)]">
-          設定ファイルを読み込んでいます…
-        </div>
-      </div>
-    );
-  }
-
-  if (loadState === "error") {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-center">
-          <p className="mb-2 font-mono text-sm" style={{ color: "var(--color-destructive)" }}>
-            読み込みエラー
-          </p>
-          <p className="mb-4 font-mono text-xs text-[var(--color-muted-foreground)]">{loadError}</p>
-          <button
-            type="button"
-            onClick={handleReload}
-            className="rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm text-[var(--color-primary-foreground)] transition hover:opacity-90"
-          >
-            再読み込み
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // ── Derived state flags ────────────────────────────────
+  const isLoading = loadState === "loading";
+  const hasError = loadState === "error";
 
   const isValid = allErrors.length === 0;
-  const saveDisabled = !isValid || saveState === "saving" || !isDirty;
+  const saveDisabled = isLoading || !isValid || saveState === "saving" || !isDirty;
   const toggleBottomTab = (tab: BottomTab) => {
     setActiveBottomTab((current) => (current === tab ? null : tab));
   };
@@ -749,7 +722,7 @@ export default function App() {
           <EngineBar
             engine={config.engine}
             onChange={handleEngineChange}
-            readOnly={!isInteractive}
+            readOnly={isLoading || !isInteractive}
           />
         </div>
 
@@ -757,6 +730,7 @@ export default function App() {
           <button
             type="button"
             onClick={handleReload}
+            disabled={isLoading}
             className={`flex h-7 w-24 items-center justify-center gap-1.5 rounded-md border text-xs transition ${
               configFileChanged
                 ? "animate-pulse border-[var(--color-ar-border)] bg-[color-mix(in_oklch,var(--color-ar-border)_15%,transparent)] font-semibold text-[var(--color-ar-border)] hover:bg-[color-mix(in_oklch,var(--color-ar-border)_25%,transparent)]"
@@ -773,7 +747,7 @@ export default function App() {
               height="11"
               viewBox="0 0 11 11"
               fill="none"
-              className={configFileChanged ? "animate-spin" : ""}
+              className={configFileChanged || isLoading ? "animate-spin" : ""}
             >
               <path
                 d="M9.5 5.5A4 4 0 1 1 8 2.2"
@@ -904,47 +878,57 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         {/* Canvas */}
         <div className="relative flex-1">
-          <FlowCanvas
-            nodes={filteredNodes}
-            edges={filteredEdges}
-            onNodesChange={handleNodesChange}
-            onEdgesChange={handleEdgesChange}
-            onConnect={handleConnect}
-            onNodeClick={handleNodeClick}
-            onEdgeClick={handleEdgeClick}
-            onPaneClick={handlePaneClick}
-            onLayout={handleLayout}
-            layoutVersion={layoutVersion}
-            isInteractive={isInteractive}
-            onToggleInteractive={handleToggleInteractive}
-            onUpdateRoute={handleUpdateRoute}
-          />
+          {isLoading ? (
+            <CanvasLoading />
+          ) : hasError ? (
+            <CanvasError error={loadError} onRetry={handleReload} />
+          ) : (
+            <FlowCanvas
+              nodes={filteredNodes}
+              edges={filteredEdges}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
+              onConnect={handleConnect}
+              onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
+              onPaneClick={handlePaneClick}
+              onLayout={handleLayout}
+              layoutVersion={layoutVersion}
+              isInteractive={isInteractive}
+              onToggleInteractive={handleToggleInteractive}
+              onUpdateRoute={handleUpdateRoute}
+            />
+          )}
           {/* Floating "Add Device" button */}
-          <button
-            type="button"
-            onClick={handleAddDevice}
-            disabled={!isInteractive}
-            className="absolute top-3 left-3 z-10 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-xs text-[var(--color-foreground)] shadow-md transition hover:bg-[var(--color-muted)] disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            + デバイス追加
-          </button>
+          {!isLoading && !hasError && (
+            <button
+              type="button"
+              onClick={handleAddDevice}
+              disabled={!isInteractive}
+              className="absolute top-3 left-3 z-10 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-xs text-[var(--color-foreground)] shadow-md transition hover:bg-[var(--color-muted)] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              + デバイス追加
+            </button>
+          )}
           {/* Visibility filter checkboxes */}
-          <div className="absolute top-3 right-3 z-10 flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-card)]/90 px-3 py-2 shadow-md backdrop-blur">
-            <FilterCheckbox
-              checked={showDisconnected}
-              onChange={() => setShowDisconnected((v) => !v)}
-              label="Disconnected"
-              count={disconnectedCount}
-            />
-            <FilterCheckbox
-              checked={showMissing}
-              onChange={() => setShowMissing((v) => !v)}
-              label="Missing"
-              count={missingCount}
-            />
-          </div>
+          {!isLoading && !hasError && (
+            <div className="absolute top-3 right-3 z-10 flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-card)]/90 px-3 py-2 shadow-md backdrop-blur">
+              <FilterCheckbox
+                checked={showDisconnected}
+                onChange={() => setShowDisconnected((v) => !v)}
+                label="Disconnected"
+                count={disconnectedCount}
+              />
+              <FilterCheckbox
+                checked={showMissing}
+                onChange={() => setShowMissing((v) => !v)}
+                label="Missing"
+                count={missingCount}
+              />
+            </div>
+          )}
           {/* Config path badge */}
-          {configPath && (
+          {!isLoading && !hasError && configPath && (
             <div className="absolute right-3 bottom-3 z-10 rounded bg-[var(--color-card)]/80 px-2 py-1 font-mono text-[10px] text-[var(--color-muted-foreground)] backdrop-blur">
               {configPath}
             </div>
@@ -965,6 +949,7 @@ export default function App() {
             onAddDevice={handleAddDevice}
             availableDevices={availableDevices}
             readOnly={!isInteractive}
+            loading={isLoading}
           />
         </aside>
       </div>
@@ -983,7 +968,7 @@ export default function App() {
           >
             <BottomTabButton
               active={activeBottomTab === "validation"}
-              statusLabel={isValid ? "valid" : `${allErrors.length} err`}
+              statusLabel={isLoading ? "…" : isValid ? "valid" : `${allErrors.length} err`}
               statusTone={isValid ? "ok" : "error"}
               badge={allErrors.length > 0 ? allErrors.length : clientWarnings.length}
               tone={allErrors.length > 0 ? "error" : clientWarnings.length > 0 ? "warning" : "ok"}
@@ -1139,4 +1124,57 @@ function addEdgeSafe(edges: Edge[], newEdge: Edge): Edge[] {
   const exists = edges.some((e) => e.source === newEdge.source && e.target === newEdge.target);
   if (exists) return edges;
   return [...edges, newEdge];
+}
+
+/**
+ * Animated audio equalizer loading indicator for the canvas area.
+ * Uses the app's semantic palette (cyan = border/in-out activity).
+ */
+function CanvasLoading() {
+  const bars = [0, 1, 2, 3, 4];
+  const delays = ["0ms", "120ms", "240ms", "180ms", "60ms"];
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-4">
+      <div className="flex items-end gap-1.5" style={{ height: "32px" }}>
+        {bars.map((i) => (
+          <div
+            key={i}
+            style={{
+              width: "3px",
+              height: "100%",
+              background: "var(--color-ar-border)",
+              borderRadius: "1.5px",
+              transformOrigin: "bottom",
+              animation: "ar-eq-bar 0.8s ease-in-out infinite",
+              animationDelay: delays[i],
+            }}
+          />
+        ))}
+      </div>
+      <span className="text-xs text-[var(--color-muted-foreground)]">
+        設定ファイルを読み込んでいます…
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Inline error display for the canvas area when config loading fails.
+ */
+function CanvasError({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center">
+      <p className="font-mono text-sm" style={{ color: "var(--color-destructive)" }}>
+        読み込みエラー
+      </p>
+      <p className="max-w-md font-mono text-xs text-[var(--color-muted-foreground)]">{error}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm text-[var(--color-primary-foreground)] transition hover:opacity-90"
+      >
+        再読み込み
+      </button>
+    </div>
+  );
 }

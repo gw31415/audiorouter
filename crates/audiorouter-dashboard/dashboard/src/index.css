@@ -105,6 +105,17 @@ input[type="number"]::-webkit-outer-spin-button {
   }
 }
 
+/* ── Canvas loading equalizer animation ──────────────── */
+@keyframes ar-eq-bar {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
 /* ── React Flow overrides ────────────────────────────── */
 .react-flow__attribution {
   display: none;
