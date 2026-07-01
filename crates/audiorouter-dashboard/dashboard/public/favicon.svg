@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="audiorouter">
+  <title>audiorouter</title>
+  <rect width="512" height="512" rx="112" fill="#101114" />
+  <g fill="none" stroke="#00B2B2" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M132 256 L380 164" />
+    <path d="M132 256 L380 348" />
+  </g>
+  <g fill="#00B2B2">
+    <circle cx="132" cy="256" r="52" />
+    <circle cx="380" cy="164" r="52" />
+    <circle cx="380" cy="348" r="52" />
+  </g>
+</svg>
