@@ -55,6 +55,8 @@ body,
 }
 
 html {
+  /* This dashboard is dark-only; keep UA controls/scrollbars from adapting to light mode. */
+  color-scheme: dark;
   /* Viewport never scrolls */
   overflow: hidden;
 }

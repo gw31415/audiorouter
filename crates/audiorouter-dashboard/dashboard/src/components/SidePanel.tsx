@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AudioDevice } from "../lib/api";
 import type { AudiorouterConfig, DeviceConfig, RouteConfig } from "../types";
 import type { DeviceNodeData, RouteEdgeData } from "./flow-types";
@@ -88,6 +88,7 @@ export function SidePanel({
               type="text"
               value={data.name}
               placeholder={data.device || "デバイス名と同じ"}
+              autoComplete="off"
               disabled={readOnly}
               onChange={(e) => onUpdateDevice(selection.id, { name: e.target.value })}
               className="w-full rounded-md border border-[var(--color-input)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] outline-none transition focus:border-[var(--color-ring)] focus:ring-1 focus:ring-[var(--color-ring)] disabled:opacity-50 disabled:cursor-not-allowed"
@@ -98,34 +99,14 @@ export function SidePanel({
             <span className="mb-1.5 block text-xs font-medium text-[var(--color-muted-foreground)]">
               CoreAudio デバイス名
             </span>
-            <input
-              type="text"
-              list="coreaudio-devices"
+            <DeviceNameCombobox
               value={data.device}
-              placeholder="例: VT-4"
               disabled={readOnly}
-              onChange={(e) => onUpdateDevice(selection.id, { device: e.target.value })}
-              className={`w-full rounded-md border bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] outline-none transition focus:border-[var(--color-ring)] focus:ring-1 focus:ring-[var(--color-ring)] disabled:opacity-50 disabled:cursor-not-allowed ${
-                data.missingInput || data.missingOutput
-                  ? "border-[var(--color-ar-disabled)]"
-                  : "border-[var(--color-input)]"
-              }`}
+              hasMissingDevice={data.missingInput || data.missingOutput}
+              availableDevices={availableDevices}
+              usedDeviceNames={usedDeviceNames}
+              onChange={(device) => onUpdateDevice(selection.id, { device })}
             />
-            <datalist id="coreaudio-devices">
-              {availableDevices
-                .filter((dev) => !usedDeviceNames.has(dev.name))
-                .map((dev) => (
-                  <option key={dev.name} value={dev.name}>
-                    {dev.maxInputChannels > 0 && dev.maxOutputChannels > 0
-                      ? "in/out"
-                      : dev.maxInputChannels > 0
-                        ? "input"
-                        : "output"}
-                    {dev.isDefaultInput ? " · default input" : ""}
-                    {dev.isDefaultOutput ? " · default output" : ""}
-                  </option>
-                ))}
-            </datalist>
             {(data.missingInput || data.missingOutput) && (
               <span
                 className="mt-1 block text-xs italic"
@@ -408,6 +389,126 @@ export function SidePanel({
       </div>
     </div>
   );
+}
+
+function DeviceNameCombobox({
+  value,
+  disabled,
+  hasMissingDevice,
+  availableDevices,
+  usedDeviceNames,
+  onChange,
+}: {
+  value: string;
+  disabled?: boolean;
+  hasMissingDevice: boolean;
+  availableDevices: AudioDevice[];
+  usedDeviceNames: Set<string>;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const suggestions = useMemo(() => {
+    const q = value.trim().toLocaleLowerCase();
+    return availableDevices
+      .filter((dev) => !usedDeviceNames.has(dev.name) || dev.name === value)
+      .filter((dev) => q === "" || dev.name.toLocaleLowerCase().includes(q))
+      .slice(0, 8);
+  }, [availableDevices, usedDeviceNames, value]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [suggestions.length, value]);
+
+  const selectSuggestion = (name: string) => {
+    onChange(name);
+    setOpen(false);
+  };
+
+  const showMenu = open && !disabled && suggestions.length > 0;
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={value}
+        placeholder="例: VT-4"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        disabled={disabled}
+        role="combobox"
+        aria-expanded={showMenu}
+        aria-autocomplete="list"
+        aria-controls="coreaudio-device-suggestions"
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 100)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+            setActiveIndex((i) => Math.min(i + 1, suggestions.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActiveIndex((i) => Math.max(i - 1, 0));
+          } else if (e.key === "Enter" && showMenu) {
+            e.preventDefault();
+            selectSuggestion(suggestions[activeIndex]?.name ?? suggestions[0].name);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        className={`w-full rounded-md border bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] outline-none transition focus:border-[var(--color-ring)] focus:ring-1 focus:ring-[var(--color-ring)] disabled:opacity-50 disabled:cursor-not-allowed ${
+          hasMissingDevice ? "border-[var(--color-ar-disabled)]" : "border-[var(--color-input)]"
+        }`}
+      />
+      {showMenu && (
+        <div
+          id="coreaudio-device-suggestions"
+          role="listbox"
+          className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-card)] py-1 text-sm text-[var(--color-foreground)] shadow-lg shadow-black/40"
+        >
+          {suggestions.map((dev, index) => {
+            const selected = index === activeIndex;
+            return (
+              <button
+                key={dev.name}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => selectSuggestion(dev.name)}
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition"
+                style={{
+                  background: selected ? "var(--color-muted)" : "transparent",
+                  color: "var(--color-foreground)",
+                }}
+              >
+                <span className="min-w-0 truncate">{dev.name}</span>
+                <span className="shrink-0 text-[10px] text-[var(--color-muted-foreground)]">
+                  {deviceKindLabel(dev)}
+                  {dev.isDefaultInput ? " · default in" : ""}
+                  {dev.isDefaultOutput ? " · default out" : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function deviceKindLabel(dev: AudioDevice): string {
+  if (dev.maxInputChannels > 0 && dev.maxOutputChannels > 0) return "in/out";
+  if (dev.maxInputChannels > 0) return "input";
+  return "output";
 }
 
 function TogglePill({

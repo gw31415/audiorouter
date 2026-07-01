@@ -177,7 +177,7 @@ function restoreStaticHeadTags(root: string, builtHtml: string): string {
     .map((line) => line.trim())
     .filter(
       (line) =>
-        /<meta\s+name="theme-color"(?:\s|>)/.test(line) ||
+        /<meta\s+name="(?:color-scheme|theme-color)"(?:\s|>)/.test(line) ||
         /<link\s+[^>]*rel="(?:alternate icon|apple-touch-icon|icon)"(?:\s|>)/.test(line),
     );
 
