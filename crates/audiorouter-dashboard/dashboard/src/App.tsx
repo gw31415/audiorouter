@@ -7,7 +7,8 @@ import {
   type Node,
   type NodeChange,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import audiorouterLogoSvg from "../../../../assets/audiorouter.svg?raw";
 import { EngineBar } from "./components/EngineBar";
 import type { DeviceNodeData, RouteEdgeData } from "./components/flow-types";
 import {
@@ -37,6 +38,10 @@ import { createEmptyConfig, effectiveName } from "./types";
 type LoadState = "loading" | "loaded" | "error";
 type BottomTab = "validation" | "toml" | "log";
 type ValidationIssue = ValidationError | ValidationWarning;
+
+const DARK_HEADER_LOGO_STYLE = {
+  "--audiorouter-logo-router": "#E4E5E8",
+} as CSSProperties;
 
 function configFingerprint(config: AudiorouterConfig): string {
   return JSON.stringify(config);
@@ -714,30 +719,11 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-card)] px-4 py-2.5">
         <div className="flex items-center gap-4">
           <h1 className="flex shrink-0 items-center gap-1.5">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 120 32"
-              height="20"
-              role="img"
-              aria-label="audiorouter"
-              className="shrink-0"
-            >
-              <title>audiorouter</title>
-              <text
-                x={60}
-                y="23"
-                textAnchor="middle"
-                fontFamily="ui-sans-serif, system-ui, -apple-system, sans-serif"
-                fontSize="22"
-                fontWeight="700"
-                letterSpacing="-0.5"
-                textLength={117}
-                lengthAdjust="spacingAndGlyphs"
-              >
-                <tspan fill="var(--color-ar-border)">audio</tspan>
-                <tspan fill="var(--color-foreground)">router</tspan>
-              </text>
-            </svg>
+            <span
+              className="block h-5 w-[75px] shrink-0 [&_svg]:h-full [&_svg]:w-full"
+              style={DARK_HEADER_LOGO_STYLE}
+              dangerouslySetInnerHTML={{ __html: audiorouterLogoSvg }}
+            />
             <span className="text-xs font-normal text-[var(--color-muted-foreground)]">
               dashboard
             </span>

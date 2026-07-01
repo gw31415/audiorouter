@@ -48,6 +48,17 @@ fn main() {
 }
 
 fn emit_frontend_rerun_if_changed(frontend_dir: &std::path::Path) {
+    if let Some(repo_root) = frontend_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+    {
+        let logo = repo_root.join("assets/audiorouter.svg");
+        if logo.exists() {
+            println!("cargo:rerun-if-changed={}", logo.display());
+        }
+    }
+
     for file in [
         "index.html",
         "package.json",
