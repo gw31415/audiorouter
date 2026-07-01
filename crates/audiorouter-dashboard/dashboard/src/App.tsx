@@ -707,6 +707,22 @@ export default function App() {
   const isLoading = loadState === "loading";
   const hasError = loadState === "error";
 
+  const [canvasLoadingVisible, setCanvasLoadingVisible] = useState(true);
+  const canvasLoadingStartedAt = useRef(performance.now());
+
+  useEffect(() => {
+    if (isLoading) {
+      canvasLoadingStartedAt.current = performance.now();
+      setCanvasLoadingVisible(true);
+      return;
+    }
+
+    const elapsed = performance.now() - canvasLoadingStartedAt.current;
+    const delay = Math.max(0, 120 - elapsed);
+    const timeout = window.setTimeout(() => setCanvasLoadingVisible(false), delay);
+    return () => window.clearTimeout(timeout);
+  }, [isLoading]);
+
   const isValid = allErrors.length === 0;
   const saveDisabled = isLoading || !isValid || saveState === "saving" || !isDirty;
   const toggleBottomTab = (tab: BottomTab) => {
@@ -887,9 +903,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         {/* Canvas */}
         <div className="relative flex-1">
-          {isLoading ? (
-            <CanvasLoading />
-          ) : hasError ? (
+          {hasError ? (
             <CanvasError error={loadError} onRetry={handleReload} />
           ) : (
             <FlowCanvas
@@ -908,6 +922,7 @@ export default function App() {
               onUpdateRoute={handleUpdateRoute}
             />
           )}
+          <CanvasLoading visible={canvasLoadingVisible} />
           {/* Floating "Add Device" button */}
           {!isLoading && !hasError && (
             <button
@@ -1147,12 +1162,21 @@ function addEdgeSafe(edges: Edge[], newEdge: Edge): Edge[] {
  * Animated audio equalizer loading indicator for the canvas area.
  * Uses the app's semantic palette (cyan = border/in-out activity).
  */
-function CanvasLoading() {
+function CanvasLoading({ visible }: { visible: boolean }) {
   const bars = [0, 1, 2, 3, 4];
   const delays = ["0ms", "120ms", "240ms", "180ms", "60ms"];
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-4">
-      <div className="flex items-end gap-1.5" style={{ height: "32px" }}>
+    <div
+      className={`absolute inset-0 z-20 flex h-full w-full flex-col items-center justify-center gap-4 bg-[var(--color-background)]/95 transition-opacity duration-500 ease-out ${
+        visible ? "opacity-100" : "pointer-events-none opacity-0"
+      }`}
+    >
+      <div
+        className={`flex items-end gap-1.5 transition-all duration-500 ease-out ${
+          visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-95 opacity-0"
+        }`}
+        style={{ height: "32px" }}
+      >
         {bars.map((i) => (
           <div
             key={i}
@@ -1168,7 +1192,11 @@ function CanvasLoading() {
           />
         ))}
       </div>
-      <span className="text-xs text-[var(--color-muted-foreground)]">
+      <span
+        className={`text-xs text-[var(--color-muted-foreground)] transition-all duration-500 ease-out ${
+          visible ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
+        }`}
+      >
         設定ファイルを読み込んでいます…
       </span>
     </div>
