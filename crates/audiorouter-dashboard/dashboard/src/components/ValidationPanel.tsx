@@ -65,25 +65,37 @@ function IssueGroup({
       <ul className="space-y-1">
         {issues.map((issue, i) => (
           <li key={`${issue.path}:${issue.message}:${i}`}>
-            <button
-              type="button"
-              onClick={() => onIssueClick?.(issue)}
-              className="flex w-full cursor-pointer items-start gap-2 rounded-md p-2 text-left text-xs transition hover:bg-[var(--color-muted)]"
+            <div
+              role="button"
+              tabIndex={0}
+              className="validation-issue flex w-full cursor-pointer items-start gap-2 rounded-md p-2 text-left text-xs transition hover:bg-[var(--color-muted)]"
               style={{
                 background: `color-mix(in oklch, ${toneColor} 10%, transparent)`,
               }}
               title="クリックして該当するノードまたはパスを選択"
+              onClick={() => {
+                if (window.getSelection()?.toString()) return;
+                onIssueClick?.(issue);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onIssueClick?.(issue);
+                }
+              }}
             >
               <span className="shrink-0" style={{ color: toneColor }}>
                 {icon}
               </span>
-              {issue.path && (
-                <code className="shrink-0 font-mono text-[var(--color-muted-foreground)]">
-                  {issue.path}
-                </code>
-              )}
-              <span className="text-[var(--color-foreground)]">{issue.message}</span>
-            </button>
+              <span className="min-w-0 flex-1">
+                {issue.path && (
+                  <code className="mr-2 font-mono text-[var(--color-muted-foreground)]">
+                    {issue.path}
+                  </code>
+                )}
+                <span className="text-[var(--color-foreground)]">{issue.message}</span>
+              </span>
+            </div>
           </li>
         ))}
       </ul>

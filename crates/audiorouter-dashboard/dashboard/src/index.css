@@ -75,6 +75,30 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+body,
+body * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+pre,
+code,
+input *,
+textarea *,
+pre *,
+code * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.validation-issue,
+.validation-issue * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ── Scrollbar (minimal, shadcn-like) ────────────────── */
 ::-webkit-scrollbar {
   width: 6px;
