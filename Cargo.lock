@@ -121,7 +121,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audiorouter"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "audiorouter-core",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "audiorouter-core"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "audiorouter-dashboard"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "audiorouter-core",
@@ -353,9 +353,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.6.5"
+version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0a7a9bfdb35811f9e59832f0f05975114d2251b415fb534108e6f34060fd772"
+checksum = "97bf4965940c2382204c0ded6dd3dd48c0c4e872f1e76fb1bf94f45991a2cb6a"
 dependencies = [
  "clap",
 ]
@@ -1227,9 +1227,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.17"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02ab6bace2054fb888a3c16f990117b579d14a3088e472d63c6011fa185c9d3"
+checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
 dependencies = [
  "libc",
 ]
@@ -2458,9 +2458,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.52"
+version = "0.3.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e48db7b415311b615f910b3dcaa4557bcd4bf1982379c95c223fd8c2a20e210"
+checksum = "18dfaaeddcb932337b5e7866ee7d0ce9b76d2fd092997146f187ec09b4558a50"
 dependencies = [
  "deranged",
  "libc",
