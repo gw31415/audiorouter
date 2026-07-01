@@ -81,6 +81,7 @@ export default function App() {
   const [savedConfigFingerprint, setSavedConfigFingerprint] = useState<string | null>(null);
   const [configStatus, setConfigStatus] = useState<ConfigStatusResponse>(() => emptyConfigStatus());
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTab | null>(null);
+  const [renderedBottomTab, setRenderedBottomTab] = useState<BottomTab | null>(null);
   const [tomlPreview, setTomlPreview] = useState("");
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const [isInteractive, setIsInteractive] = useState(true);
@@ -725,6 +726,17 @@ export default function App() {
 
   const isValid = allErrors.length === 0;
   const saveDisabled = isLoading || !isValid || saveState === "saving" || !isDirty;
+
+  useEffect(() => {
+    if (activeBottomTab) {
+      setRenderedBottomTab(activeBottomTab);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setRenderedBottomTab(null), 200);
+    return () => window.clearTimeout(timeout);
+  }, [activeBottomTab]);
+
   const toggleBottomTab = (tab: BottomTab) => {
     setActiveBottomTab((current) => (current === tab ? null : tab));
   };
@@ -980,7 +992,7 @@ export default function App() {
 
       {/* ── Bottom panel: IDE-like tabs for validation + TOML ─────────── */}
       <section
-        className={`shrink-0 border-t border-[var(--color-border)] bg-[var(--color-card)] ${
+        className={`shrink-0 overflow-hidden border-t border-[var(--color-border)] bg-[var(--color-card)] transition-[height] duration-200 ease-out ${
           activeBottomTab ? "h-64" : "h-9"
         }`}
       >
@@ -1012,15 +1024,19 @@ export default function App() {
               onClick={() => toggleBottomTab("log")}
             />
           </div>
-          {activeBottomTab && (
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {activeBottomTab === "validation" ? (
+          {renderedBottomTab && (
+            <div
+              className={`min-h-0 flex-1 overflow-y-auto p-3 transition-all duration-200 ease-out ${
+                activeBottomTab ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
+              }`}
+            >
+              {renderedBottomTab === "validation" ? (
                 <ValidationPanel
                   errors={allErrors}
                   warnings={clientWarnings}
                   onIssueClick={handleValidationIssueClick}
                 />
-              ) : activeBottomTab === "toml" ? (
+              ) : renderedBottomTab === "toml" ? (
                 <TomlPreview toml={tomlPreview} />
               ) : (
                 <LogPanel lines={logLines} />
