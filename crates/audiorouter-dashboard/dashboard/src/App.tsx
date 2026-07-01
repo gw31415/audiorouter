@@ -977,8 +977,9 @@ export default function App() {
           >
             <BottomTabButton
               active={activeBottomTab === "validation"}
-              statusLabel={isLoading ? "…" : isValid ? "valid" : `${allErrors.length} err`}
+              statusLabel={isValid ? "valid" : `${allErrors.length} err`}
               statusTone={isValid ? "ok" : "error"}
+              pending={isLoading}
               badge={allErrors.length > 0 ? allErrors.length : clientWarnings.length}
               tone={allErrors.length > 0 ? "error" : clientWarnings.length > 0 ? "warning" : "ok"}
               onClick={() => toggleBottomTab("validation")}
@@ -1025,6 +1026,7 @@ function BottomTabButton({
   label,
   statusLabel,
   statusTone,
+  pending,
   badge,
   tone,
   onClick,
@@ -1033,6 +1035,7 @@ function BottomTabButton({
   label?: string;
   statusLabel?: string;
   statusTone?: "ok" | "error";
+  pending?: boolean;
   badge?: number;
   tone?: "ok" | "warning" | "error";
   onClick: () => void;
@@ -1049,7 +1052,7 @@ function BottomTabButton({
     <button
       type="button"
       onClick={onClick}
-      className="relative -mb-px flex h-9 items-center gap-2 border-x border-t px-3 text-xs font-medium transition"
+      className="relative -mb-px flex h-9 w-28 shrink-0 items-center justify-center gap-2 border-x border-t px-3 text-xs font-medium transition"
       style={
         active
           ? {
@@ -1068,22 +1071,27 @@ function BottomTabButton({
       {label && <span>{label}</span>}
       {statusLabel && (
         <span
-          className="inline-flex items-center gap-1 font-mono text-[10px]"
-          style={{ color: statusColor }}
+          className="grid w-14 grid-cols-[6px_1fr] items-center gap-1 font-mono text-[10px] transition-colors duration-200"
+          style={{ color: pending ? "var(--color-muted-foreground)" : statusColor }}
         >
-          <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusColor }} />
-          {statusLabel}
+          <span
+            className="h-1.5 w-1.5 rounded-full transition-colors duration-200"
+            style={{ background: pending ? "var(--color-muted-foreground)" : statusColor }}
+          />
+          <span className="truncate transition-colors duration-200">{statusLabel}</span>
         </span>
       )}
-      {badge !== undefined && badge > 0 && (
+      {badge !== undefined && (
         <span
-          className="rounded-full px-1.5 py-0.5 font-mono text-[10px] leading-none"
+          className="min-w-4 rounded-full px-1.5 py-0.5 text-center font-mono text-[10px] leading-none transition-colors duration-200"
           style={{
-            background: `color-mix(in oklch, ${badgeColor} 18%, transparent)`,
-            color: badgeColor,
+            background:
+              badge > 0 ? `color-mix(in oklch, ${badgeColor} 18%, transparent)` : "transparent",
+            color: badge > 0 ? badgeColor : "transparent",
           }}
+          aria-hidden={badge <= 0}
         >
-          {badge}
+          {badge > 0 ? badge : 0}
         </span>
       )}
     </button>
