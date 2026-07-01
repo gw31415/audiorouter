@@ -713,9 +713,32 @@ export default function App() {
       {/* ── Top bar ────────────────────────────────────── */}
       <header className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-card)] px-4 py-2.5">
         <div className="flex items-center gap-4">
-          <h1 className="text-sm font-bold tracking-tight text-[var(--color-foreground)]">
-            <span style={{ color: "var(--color-ar-border)" }}>audio</span>router
-            <span className="ml-1.5 text-xs font-normal text-[var(--color-muted-foreground)]">
+          <h1 className="flex shrink-0 items-center gap-1.5">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 120 32"
+              height="20"
+              role="img"
+              aria-label="audiorouter"
+              className="shrink-0"
+            >
+              <title>audiorouter</title>
+              <text
+                x={60}
+                y="23"
+                textAnchor="middle"
+                fontFamily="ui-sans-serif, system-ui, -apple-system, sans-serif"
+                fontSize="22"
+                fontWeight="700"
+                letterSpacing="-0.5"
+                textLength={117}
+                lengthAdjust="spacingAndGlyphs"
+              >
+                <tspan fill="var(--color-ar-border)">audio</tspan>
+                <tspan fill="var(--color-foreground)">router</tspan>
+              </text>
+            </svg>
+            <span className="text-xs font-normal text-[var(--color-muted-foreground)]">
               dashboard
             </span>
           </h1>

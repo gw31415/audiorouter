@@ -1,4 +1,6 @@
-# audiorouter
+<p align="center">
+  <img src="assets/audiorouter.svg" alt="audiorouter" height="46">
+</p>
 
 [![crates.io](https://img.shields.io/crates/v/audiorouter.svg)](https://crates.io/crates/audiorouter)
 
