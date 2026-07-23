@@ -1,0 +1,133 @@
+/*
+ * audiorouter docs — custom theme overrides
+ * Builds on mdBook's built-in "ayu" dark theme.
+ */
+
+:root {
+  /* Slightly warmer, deeper background for a modern terminal feel */
+  --ar-bg: #0d1117;
+  --ar-bg-alt: #161b22;
+  --ar-border: #30363d;
+  --ar-accent: #58a6ff;
+  --ar-text: #c9d1d9;
+  --ar-text-dim: #8b949e;
+}
+
+/* Use our palette in the ayu theme */
+.ayu {
+  --bg: var(--ar-bg);
+  --bg-alt: var(--ar-bg-alt);
+  --fg: var(--ar-text);
+  --sidebar-bg: var(--ar-bg-alt);
+  --sidebar-fg: var(--ar-text-dim);
+  --sidebar-non-existant: #484f58;
+  --theme-hover: #1f2937;
+  --border: var(--ar-border);
+  --table-border: var(--ar-border);
+  --links: var(--ar-accent);
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP",
+    Helvetica, Arial, sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* Headings — tighter, cleaner */
+h1, h2, h3, h4 {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: 1.9rem; }
+h2 { font-size: 1.45rem; }
+h3 { font-size: 1.2rem; }
+
+/* Code blocks — terminal aesthetic */
+code {
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code",
+    Consolas, monospace;
+  font-size: 0.875em;
+  background: var(--ar-bg-alt);
+  border: 1px solid var(--ar-border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  background: var(--ar-bg) !important;
+  border: 1px solid var(--ar-border);
+  border-radius: 8px;
+}
+
+pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+/* Tables — GitHub-style */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.2em 0;
+}
+
+th, td {
+  border: 1px solid var(--ar-border);
+  padding: 0.5em 0.8em;
+  text-align: left;
+}
+
+th {
+  background: var(--ar-bg-alt);
+  font-weight: 600;
+}
+
+tr:nth-child(even) {
+  background: rgba(22, 27, 34, 0.5);
+}
+
+/* Links */
+a {
+  color: var(--ar-accent);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Sidebar polish */
+.sidebar {
+  border-right: 1px solid var(--ar-border);
+}
+
+.chapter {
+  margin: 0.2rem 0;
+}
+
+/* Content max-width for readability */
+.content {
+  max-width: 52rem;
+}
+
+/* Blockquotes — subtle accent */
+blockquote {
+  border-left: 3px solid var(--ar-accent);
+  background: var(--ar-bg-alt);
+  border-radius: 0 6px 6px 0;
+  padding: 0.5em 1em;
+  margin: 1em 0;
+  color: var(--ar-text-dim);
+}
+
+/* Theme picker — remove light/rust clutter for dark-only preference */
+/* (kept available but ayu stays default) */

@@ -3,6 +3,7 @@
 </p>
 
 [![crates.io](https://img.shields.io/crates/v/audiorouter.svg)](https://crates.io/crates/audiorouter)
+[![Documentation](https://img.shields.io/badge/docs-audiorouter.amas.dev-blue.svg)](https://audiorouter.amas.dev)
 
 ![demo](assets/demo.gif)
 
