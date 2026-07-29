@@ -5,6 +5,8 @@
 </p>
 
 [![crates.io](https://img.shields.io/crates/v/audiorouter.svg)](https://crates.io/crates/audiorouter)
+[![Orynth](https://img.shields.io/badge/Orynth-audiorouter-7c3aed.svg)](https://www.orynth.dev/projects/audiorouter)
+[![Trade ARTR](https://img.shields.io/badge/Trade-ARTR-14b8a6.svg)](https://www.orynth.dev/projects/audiorouter)
 
 **audiorouter** is a cross-platform audio router for mapping, mixing, and
 monitoring audio channels in real time. It reads a TOML configuration file,
@@ -36,4 +38,5 @@ dashboard.
 | GitHub | <https://github.com/gw31415/audiorouter> |
 | crates.io | <https://crates.io/crates/audiorouter> |
 | API documentation | <https://docs.rs/audiorouter> |
+| Orynth / ARTR market | <https://www.orynth.dev/projects/audiorouter> |
 | License | Apache License 2.0 |

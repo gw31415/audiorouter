@@ -4,6 +4,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/audiorouter.svg)](https://crates.io/crates/audiorouter)
 [![Documentation](https://img.shields.io/badge/docs-audiorouter.amas.dev-blue.svg)](https://audiorouter.amas.dev)
+[![Orynth](https://img.shields.io/badge/Orynth-audiorouter-7c3aed.svg)](https://www.orynth.dev/projects/audiorouter)
+[![Trade ARTR](https://img.shields.io/badge/Trade-ARTR-14b8a6.svg)](https://www.orynth.dev/projects/audiorouter)
 
 ![demo](assets/demo.gif)
 
