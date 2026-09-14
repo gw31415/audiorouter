@@ -23,10 +23,10 @@ jobs:
     name: Build mdBook
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install mdBook
-        uses: peaceiris/actions-mdbook@v2
+        uses: peaceiris/actions-mdbook@a6f333f62c4b46ed5190d00cab3b7f9a6996274c # main (Node 24)
         with:
           mdbook-version: "0.4.51"
 
@@ -35,8 +35,9 @@ jobs:
         run: mdbook build
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
+          include-hidden-files: true
           path: docs/book
 
   deploy:
@@ -49,4 +50,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.1
